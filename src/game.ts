@@ -135,6 +135,7 @@ interface Particle {
   angle: number;
   omega: number;                  // angular velocity (rad/s)
   active: boolean;                // true once center has been below DANGER_Y
+  prevY: number;                  // y position from previous frame (for crossing detection)
   graceFrames: number;            // frames of immunity after merge
 }
 
@@ -252,6 +253,7 @@ function createParticle(x: number, y: number, level: number): Particle {
     angle: 0,
     omega: 0,
     active: false,
+    prevY: y,
     graceFrames: 0,
   };
 }
@@ -522,7 +524,7 @@ function checkGameOver() {
 
   for (const p of particles) {
     if (p.graceFrames > 0) continue;
-    if (p.active && p.y < DANGER_Y) {
+    if (p.active && p.prevY >= DANGER_Y && p.y < DANGER_Y) {
       gameOver = true;
       finalScoreEl.textContent = score.toString();
       gameOverEl.style.display = 'flex';
@@ -575,6 +577,7 @@ function processMerges() {
     np.vy = Math.max(avgVy * 0.15, 0);
     np.omega = 0;
     np.active = a.active || b.active;
+    np.prevY = my;
     np.graceFrames = 30;
     particles.push(np);
 
@@ -1115,6 +1118,9 @@ function setupInput() {
 
 function update() {
   if (!gameOver) {
+    for (const p of particles) {
+      p.prevY = p.y;
+    }
     const dt = (1 / 60) / SUB_STEPS;
     for (let i = 0; i < SUB_STEPS; i++) {
       physicsStep(dt);
