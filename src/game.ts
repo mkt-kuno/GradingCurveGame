@@ -1044,10 +1044,10 @@ function interpD(target: number, pts: { x: number; y: number }[]): number | null
 
 function updateNextPreview() {
   const ctx = nCtx;
-  const s = 120;
+  const s = 96;
   ctx.clearRect(0, 0, s, s);
   const r = LEVELS[nextLevel].radius;
-  const sc = Math.min(50 / r, 1);
+  const sc = Math.min(40 / r, 1);
   ctx.save();
   ctx.translate(s / 2, s / 2);
   ctx.scale(sc, sc);
