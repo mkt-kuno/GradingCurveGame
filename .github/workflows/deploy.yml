@@ -36,6 +36,7 @@ jobs:
           cp sw.js _deploy/
           cp manifest.json _deploy/
           cp icons/icon.svg _deploy/icons/
+          cp icons/icon.svg _deploy/favicon.svg
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
