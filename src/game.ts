@@ -787,8 +787,8 @@ function drawGame() {
   ctx.lineTo(CR, 0);
   ctx.stroke();
 
-  const dAlpha = dangerTimer > 0 ? 0.25 + 0.5 * Math.abs(Math.sin(Date.now() / 130)) : 0.15;
-  ctx.strokeStyle = `rgba(255,60,60,${dAlpha})`;
+  const dAlpha = dangerTimer > 0 ? 0.55 + 0.45 * Math.abs(Math.sin(Date.now() / 130)) : 0.45;
+  ctx.strokeStyle = `rgba(255,30,30,${dAlpha})`;
   ctx.lineWidth = 5;
   ctx.setLineDash([12, 6]);
   ctx.beginPath();
@@ -797,7 +797,7 @@ function drawGame() {
   ctx.stroke();
   ctx.setLineDash([]);
 
-  ctx.fillStyle = `rgba(255,60,60,${dAlpha * 0.7})`;
+  ctx.fillStyle = `rgba(255,30,30,${dAlpha * 0.8})`;
   ctx.font = '9px sans-serif';
   ctx.textAlign = 'right';
   ctx.fillText('DEAD LINE', CR - 4, DANGER_Y - 4);
