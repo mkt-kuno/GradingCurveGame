@@ -6,6 +6,6 @@
       <stop offset="1" stop-color="#C2A47A"/>
     </radialGradient>
   </defs>
-  <circle cx="256" cy="256" r="194" fill="url(#g)" stroke="#7E5E38" stroke-width="10"/>
-  <text x="256" y="270" text-anchor="middle" dominant-baseline="central" font-family="sans-serif" font-weight="bold" font-size="160" fill="#3E2723">粒</text>
+  <circle cx="256" cy="256" r="220" fill="url(#g)" stroke="#7E5E38" stroke-width="10"/>
+  <text x="256" y="256" text-anchor="middle" dominant-baseline="central" font-family="sans-serif" font-weight="bold" font-size="300" fill="#3E2723">粒</text>
 </svg>
