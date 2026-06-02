@@ -64,24 +64,38 @@ const DANGER_Y = 75;
 //
 // Pixel-space values scaled for gameplay while preserving ratio
 
+// Material Properties — 全て珪砂 (Silica sand)
+// ================================================================
+// Silica sand (珪砂, e.g. Toyoura sand):
+//   E = 70 GPa,  ν = 0.17,  ρ = 2650 kg/m³
+//   Internal friction angle φ ≈ 30° → μ ≈ 0.45
+//   Restitution e ≈ 0.50
+//   Rolling friction μ_r ≈ 0.02-0.05
+//
+// E* derivation (Hertz):
+//   PP (sand-sand): 1/E* = 2(1-0.17²)/70e9 → E* ≈ 36.0 GPa
+//   PW (sand-wall): 壁も珪砂 → E* ≈ 36.0 GPa (same as PP)
+//
+// Pixel-space values scaled for gameplay
+
 const GRAVITY = 700;
 
 // Hertz: F_n = (4/3)·E*·√R*·δ^(3/2)
 const ESTAR_PP = 10000;
-const ESTAR_PW = 1200;
+const ESTAR_PW = 10000;           // 壁も珪砂 → PPと同じ
 
 // Hooke: F_n = k_n · δ
 const KN_PP = 100000;
-const KN_PW = 15000;
+const KN_PW = 100000;             // 壁も珪砂 → PPと同じ
 
-const MU_PP = 0.45;       // Sand internal friction (φ≈24°)
-const MU_PW = 0.70;       // Sand-rubber friction
-const REST_PP = 0.50;     // Sand-sand restitution
-const REST_PW = 0.55;     // Sand-rubber restitution
+const MU_PP = 0.45;               // 珪砂内部摩擦 (φ≈24°)
+const MU_PW = 0.80;               // 壁も珪砂 → 同じ
+const REST_PP = 0.50;             // 珪砂-珪砂反発係数
+const REST_PW = 0.50;             // 壁も珪砂 → 同じ
 
-// Rolling friction coefficient (CDT model): μ_r << μ
+// Rolling friction (CDT): μ_r ≈ 0.02-0.05 for sand
 const MU_ROLL_PP = 0.03;
-const MU_ROLL_PW = 0.05;
+const MU_ROLL_PW = 0.15;          // 壁も珪砂 → 同じ
 
 // β = −ln(e) / √(π²+ln²(e))  (Tsuji damping)
 function beta(e: number): number {
@@ -118,6 +132,7 @@ interface Particle {
   angle: number;
   omega: number;                  // angular velocity (rad/s)
   active: boolean;                // true once center has been below DANGER_Y
+  graceFrames: number;            // frames of immunity after merge
 }
 
 interface ContactVis {
@@ -162,7 +177,7 @@ let dropX = GAME_W / 2;
 let canDrop = true;
 let gameOver = false;
 let mergeCount = 0;
-let contactModel: ContactModel = 'hertz';
+let contactModel: ContactModel = 'hooke';
 let showForceChains = false;
 let comboCount = 0;
 let comboTimer = 0;
@@ -234,6 +249,7 @@ function createParticle(x: number, y: number, level: number): Particle {
     angle: 0,
     omega: 0,
     active: false,
+    graceFrames: 0,
   };
 }
 
@@ -409,9 +425,8 @@ function physicsStep(dt: number) {
       const vSlide = p.vx + p.omega * p.radius;
       if (Math.abs(vSlide) > 0.01) {
         const ftMax = MU_PW * fn;
-        const ft = Math.min(ftMax, Math.abs(vSlide) * p.mass / dt * 0.5);
+        const ft = Math.min(ftMax, Math.abs(vSlide) * p.mass / dt * 2.0);
         p.vx -= Math.sign(vSlide) * (ft / p.mass) * dt;
-        // Torque: τ = −sign(v_slide)·|F_t|·R
         p.omega -= Math.sign(vSlide) * (ft * p.radius / p.inertia) * dt;
       }
 
@@ -421,6 +436,9 @@ function physicsStep(dt: number) {
         const imp = Math.min(tauR * dt, Math.abs(p.omega) * p.inertia * 0.5);
         p.omega -= Math.sign(p.omega) * imp / p.inertia;
       }
+
+      // Direct wall grip: kill rotation near wall
+      p.omega *= 0.85;
 
       p.y = Math.min(p.y, CB - p.radius);
     }
@@ -434,10 +452,11 @@ function physicsStep(dt: number) {
       p.vx += (fn / p.mass) * dt;
       const vSlide = p.vy + p.omega * p.radius;
       if (Math.abs(vSlide) > 0.01) {
-        const ft = Math.min(MU_PW * fn, Math.abs(vSlide) * p.mass / dt * 0.5);
+        const ft = Math.min(MU_PW * fn, Math.abs(vSlide) * p.mass / dt * 2.0);
         p.vy -= Math.sign(vSlide) * (ft / p.mass) * dt;
         p.omega -= Math.sign(vSlide) * (ft * p.radius / p.inertia) * dt;
       }
+      p.omega *= 0.85;
       p.x = Math.max(p.x, CL + p.radius);
     }
 
@@ -450,10 +469,11 @@ function physicsStep(dt: number) {
       p.vx -= (fn / p.mass) * dt;
       const vSlide = -(p.vy - p.omega * p.radius);
       if (Math.abs(vSlide) > 0.01) {
-        const ft = Math.min(MU_PW * fn, Math.abs(vSlide) * p.mass / dt * 0.5);
+        const ft = Math.min(MU_PW * fn, Math.abs(vSlide) * p.mass / dt * 2.0);
         p.vy += Math.sign(vSlide) * (ft / p.mass) * dt;
         p.omega += Math.sign(vSlide) * (ft * p.radius / p.inertia) * dt;
       }
+      p.omega *= 0.85;
       p.x = Math.min(p.x, CR - p.radius);
     }
   }
@@ -498,6 +518,7 @@ function checkGameOver() {
   }
 
   for (const p of particles) {
+    if (p.graceFrames > 0) continue;
     if (p.active && p.y < DANGER_Y) {
       gameOver = true;
       finalScoreEl.textContent = score.toString();
@@ -545,10 +566,13 @@ function processMerges() {
 
     const tm = a.mass + b.mass;
     const np = createParticle(mx, my, newLevel);
-    np.vx = (a.vx * a.mass + b.vx * b.mass) / tm;
-    np.vy = (a.vy * a.mass + b.vy * b.mass) / tm - 30;
-    np.omega = (a.omega * a.inertia + b.omega * b.inertia) / (a.inertia + b.inertia);
+    const avgVx = (a.vx * a.mass + b.vx * b.mass) / tm;
+    const avgVy = (a.vy * a.mass + b.vy * b.mass) / tm;
+    np.vx = avgVx * 0.15;
+    np.vy = Math.max(avgVy * 0.15, 0);
+    np.omega = 0;
     np.active = a.active || b.active;
+    np.graceFrames = 30;
     particles.push(np);
 
     effects.push({ x: mx, y: my, r: LEVELS[newLevel].radius * 0.3, alpha: 1, color: LEVELS[newLevel].color });
@@ -816,7 +840,7 @@ function drawGradingChart() {
   const ctx = cCtx;
   const W = chartCanvas.width;
   const H = chartCanvas.height;
-  const pad = { top: 15, right: 12, bottom: 32, left: 38 };
+  const pad = { top: 20, right: 16, bottom: 40, left: 46 };
   const pW = W - pad.left - pad.right;
   const pH = H - pad.top - pad.bottom;
 
@@ -839,12 +863,12 @@ function drawGradingChart() {
   ctx.stroke();
 
   ctx.fillStyle = '#444';
-  ctx.font = '8px sans-serif';
+  ctx.font = '10px sans-serif';
   ctx.textAlign = 'right';
   ctx.textBaseline = 'middle';
   for (const p of [0, 20, 40, 60, 80, 100]) {
     const y = pad.top + pH - (p / 100) * pH;
-    ctx.fillText(`${p}`, pad.left - 3, y);
+    ctx.fillText(`${p}`, pad.left - 4, y);
     ctx.strokeStyle = '#ddd';
     ctx.lineWidth = 0.5;
     ctx.beginPath();
@@ -873,7 +897,7 @@ function drawGradingChart() {
     ctx.lineTo(x, pad.top + pH);
     ctx.stroke();
     ctx.fillStyle = isMain ? '#333' : '#999';
-    ctx.font = isMain ? '8px sans-serif' : '7px sans-serif';
+    ctx.font = isMain ? '10px sans-serif' : '8px sans-serif';
     ctx.fillText(`${s}`, x, pad.top + pH + 2);
   }
 
@@ -1068,6 +1092,9 @@ function update() {
     }
     processMerges();
     checkGameOver();
+    for (const p of particles) {
+      if (p.graceFrames > 0) p.graceFrames--;
+    }
   }
 
   for (const e of effects) {

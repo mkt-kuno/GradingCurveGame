@@ -22,15 +22,15 @@ var DROP_Y = 45;
 var DANGER_Y = 75;
 var GRAVITY = 700;
 var ESTAR_PP = 1e4;
-var ESTAR_PW = 1200;
+var ESTAR_PW = 1e4;
 var KN_PP = 1e5;
-var KN_PW = 15000;
+var KN_PW = 1e5;
 var MU_PP = 0.45;
-var MU_PW = 0.7;
+var MU_PW = 0.8;
 var REST_PP = 0.5;
-var REST_PW = 0.55;
+var REST_PW = 0.5;
 var MU_ROLL_PP = 0.03;
-var MU_ROLL_PW = 0.05;
+var MU_ROLL_PW = 0.15;
 function beta(e) {
   if (e <= 0)
     return 1;
@@ -61,7 +61,7 @@ var dropX = GAME_W / 2;
 var canDrop = true;
 var gameOver = false;
 var mergeCount = 0;
-var contactModel = "hertz";
+var contactModel = "hooke";
 var showForceChains = false;
 var comboCount = 0;
 var comboTimer = 0;
@@ -97,7 +97,8 @@ function createParticle(x, y, level) {
     level,
     angle: 0,
     omega: 0,
-    active: false
+    active: false,
+    graceFrames: 0
   };
 }
 function pairKey(a, b) {
@@ -219,7 +220,7 @@ function physicsStep(dt) {
       const vSlide = p.vx + p.omega * p.radius;
       if (Math.abs(vSlide) > 0.01) {
         const ftMax = MU_PW * fn;
-        const ft = Math.min(ftMax, Math.abs(vSlide) * p.mass / dt * 0.5);
+        const ft = Math.min(ftMax, Math.abs(vSlide) * p.mass / dt * 2);
         p.vx -= Math.sign(vSlide) * (ft / p.mass) * dt;
         p.omega -= Math.sign(vSlide) * (ft * p.radius / p.inertia) * dt;
       }
@@ -228,6 +229,7 @@ function physicsStep(dt) {
         const imp = Math.min(tauR * dt, Math.abs(p.omega) * p.inertia * 0.5);
         p.omega -= Math.sign(p.omega) * imp / p.inertia;
       }
+      p.omega *= 0.85;
       p.y = Math.min(p.y, CB - p.radius);
     }
     const oL = CL - (p.x - p.radius);
@@ -238,10 +240,11 @@ function physicsStep(dt) {
       p.vx += fn / p.mass * dt;
       const vSlide = p.vy + p.omega * p.radius;
       if (Math.abs(vSlide) > 0.01) {
-        const ft = Math.min(MU_PW * fn, Math.abs(vSlide) * p.mass / dt * 0.5);
+        const ft = Math.min(MU_PW * fn, Math.abs(vSlide) * p.mass / dt * 2);
         p.vy -= Math.sign(vSlide) * (ft / p.mass) * dt;
         p.omega -= Math.sign(vSlide) * (ft * p.radius / p.inertia) * dt;
       }
+      p.omega *= 0.85;
       p.x = Math.max(p.x, CL + p.radius);
     }
     const oR = p.x + p.radius - CR;
@@ -252,10 +255,11 @@ function physicsStep(dt) {
       p.vx -= fn / p.mass * dt;
       const vSlide = -(p.vy - p.omega * p.radius);
       if (Math.abs(vSlide) > 0.01) {
-        const ft = Math.min(MU_PW * fn, Math.abs(vSlide) * p.mass / dt * 0.5);
+        const ft = Math.min(MU_PW * fn, Math.abs(vSlide) * p.mass / dt * 2);
         p.vy += Math.sign(vSlide) * (ft / p.mass) * dt;
         p.omega += Math.sign(vSlide) * (ft * p.radius / p.inertia) * dt;
       }
+      p.omega *= 0.85;
       p.x = Math.min(p.x, CR - p.radius);
     }
   }
@@ -284,6 +288,8 @@ function checkGameOver() {
     return;
   }
   for (const p of particles) {
+    if (p.graceFrames > 0)
+      continue;
     if (p.active && p.y < DANGER_Y) {
       gameOver = true;
       finalScoreEl.textContent = score.toString();
@@ -322,10 +328,13 @@ function processMerges() {
     }
     const tm = a.mass + b.mass;
     const np = createParticle(mx, my, newLevel);
-    np.vx = (a.vx * a.mass + b.vx * b.mass) / tm;
-    np.vy = (a.vy * a.mass + b.vy * b.mass) / tm - 30;
-    np.omega = (a.omega * a.inertia + b.omega * b.inertia) / (a.inertia + b.inertia);
+    const avgVx = (a.vx * a.mass + b.vx * b.mass) / tm;
+    const avgVy = (a.vy * a.mass + b.vy * b.mass) / tm;
+    np.vx = avgVx * 0.15;
+    np.vy = Math.max(avgVy * 0.15, 0);
+    np.omega = 0;
     np.active = a.active || b.active;
+    np.graceFrames = 30;
     particles.push(np);
     effects.push({ x: mx, y: my, r: LEVELS[newLevel].radius * 0.3, alpha: 1, color: LEVELS[newLevel].color });
     comboCount++;
@@ -553,7 +562,7 @@ function drawGradingChart() {
   const ctx = cCtx;
   const W = chartCanvas.width;
   const H = chartCanvas.height;
-  const pad = { top: 15, right: 12, bottom: 32, left: 38 };
+  const pad = { top: 20, right: 16, bottom: 40, left: 46 };
   const pW = W - pad.left - pad.right;
   const pH = H - pad.top - pad.bottom;
   ctx.fillStyle = "#f5f5f5";
@@ -572,12 +581,12 @@ function drawGradingChart() {
   ctx.lineTo(pad.left + pW, pad.top + pH);
   ctx.stroke();
   ctx.fillStyle = "#444";
-  ctx.font = "8px sans-serif";
+  ctx.font = "10px sans-serif";
   ctx.textAlign = "right";
   ctx.textBaseline = "middle";
   for (const p of [0, 20, 40, 60, 80, 100]) {
     const y = pad.top + pH - p / 100 * pH;
-    ctx.fillText(`${p}`, pad.left - 3, y);
+    ctx.fillText(`${p}`, pad.left - 4, y);
     ctx.strokeStyle = "#ddd";
     ctx.lineWidth = 0.5;
     ctx.beginPath();
@@ -603,7 +612,7 @@ function drawGradingChart() {
     ctx.lineTo(x, pad.top + pH);
     ctx.stroke();
     ctx.fillStyle = isMain ? "#333" : "#999";
-    ctx.font = isMain ? "8px sans-serif" : "7px sans-serif";
+    ctx.font = isMain ? "10px sans-serif" : "8px sans-serif";
     ctx.fillText(`${s}`, x, pad.top + pH + 2);
   }
   ctx.font = "8px sans-serif";
@@ -785,6 +794,10 @@ function update() {
     }
     processMerges();
     checkGameOver();
+    for (const p of particles) {
+      if (p.graceFrames > 0)
+        p.graceFrames--;
+    }
   }
   for (const e of effects) {
     e.r += 2.5;
