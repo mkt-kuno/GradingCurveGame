@@ -187,6 +187,28 @@ let comboCount = 0;
 let comboTimer = 0;
 let pendingGameOver = false;
 
+function getTodayKey(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+function loadHighScore(): number {
+  try {
+    const data = localStorage.getItem('granularity_highscore');
+    if (!data) return 0;
+    const parsed = JSON.parse(data) as { date: string; score: number };
+    if (parsed.date === getTodayKey()) return parsed.score;
+    return 0;
+  } catch { return 0; }
+}
+
+function saveHighScore(s: number) {
+  localStorage.setItem('granularity_highscore', JSON.stringify({ date: getTodayKey(), score: s }));
+}
+
+let highScore = loadHighScore();
+highScoreEl.textContent = `今日のハイスコア: ${highScore}`;
+
 // ================================================================
 // DOM
 // ================================================================
@@ -199,7 +221,7 @@ const nextCanvas = document.getElementById('next-canvas') as HTMLCanvasElement;
 const nCtx = nextCanvas.getContext('2d')!;
 
 const scoreEl = document.getElementById('score-value')!;
-const mergeEl = document.getElementById('merge-count')!;
+const highScoreEl = document.getElementById('high-score')!;
 const nextNameEl = document.getElementById('next-name')!;
 const gameOverEl = document.getElementById('game-over')!;
 const finalScoreEl = document.getElementById('final-score')!;
@@ -519,6 +541,11 @@ function checkGameOver() {
     gameOver = true;
     finalScoreEl.textContent = score.toString();
     gameOverEl.style.display = 'flex';
+    if (score > highScore) {
+      highScore = score;
+      saveHighScore(highScore);
+      highScoreEl.textContent = `今日のハイスコア: ${highScore}`;
+    }
     return;
   }
 
@@ -528,6 +555,11 @@ function checkGameOver() {
       gameOver = true;
       finalScoreEl.textContent = score.toString();
       gameOverEl.style.display = 'flex';
+      if (score > highScore) {
+        highScore = score;
+        saveHighScore(highScore);
+        highScoreEl.textContent = `今日のハイスコア: ${highScore}`;
+      }
       return;
     }
   }
@@ -565,7 +597,6 @@ function processMerges() {
       effects.push({ x: mx, y: my, r: 30, alpha: 0.7, color: '#F5E6CC' });
       scorePopups.push({ x: mx, y: my, text: `+${pts} MAX!`, timer: 90 });
       scoreEl.textContent = score.toString();
-      mergeEl.textContent = `合体回数: ${mergeCount}`;
       continue;
     }
 
@@ -590,7 +621,6 @@ function processMerges() {
     mergeCount++;
     scorePopups.push({ x: mx, y: my, text: `+${pts}`, timer: 60 });
     scoreEl.textContent = score.toString();
-    mergeEl.textContent = `合体回数: ${mergeCount}`;
   }
 
   mergeQueue = [];
@@ -649,8 +679,9 @@ function restart() {
   mergeCount = 0;
 
   scoreEl.textContent = '0';
-  mergeEl.textContent = '合体回数: 0';
   gameOverEl.style.display = 'none';
+  highScore = loadHighScore();
+  highScoreEl.textContent = `今日のハイスコア: ${highScore}`;
   updateNextPreview();
 }
 
@@ -825,17 +856,27 @@ function drawGame() {
 
   for (const sp of scorePopups) {
     const alpha = sp.timer / 60;
-    ctx.fillStyle = `rgba(247,220,111,${alpha})`;
-    ctx.font = `bold ${14 + (1 - alpha) * 8}px sans-serif`;
+    const sz = 14 + (1 - alpha) * 8;
+    ctx.font = `bold ${sz}px sans-serif`;
     ctx.textAlign = 'center';
+    ctx.strokeStyle = `rgba(78,52,32,${alpha})`;
+    ctx.lineWidth = sz * 0.35;
+    ctx.lineJoin = 'round';
+    ctx.strokeText(sp.text, sp.x, sp.y - 30 + (1 - alpha) * 20);
+    ctx.fillStyle = `rgba(247,220,111,${alpha})`;
     ctx.fillText(sp.text, sp.x, sp.y - 30 + (1 - alpha) * 20);
   }
 
   if (comboCount > 1 && comboTimer > 0) {
     const alpha = comboTimer / 45;
-    ctx.fillStyle = `rgba(255,100,100,${alpha})`;
-    ctx.font = `bold ${22 + comboCount * 2}px sans-serif`;
+    const sz = 22 + comboCount * 2;
+    ctx.font = `bold ${sz}px sans-serif`;
     ctx.textAlign = 'center';
+    ctx.strokeStyle = `rgba(78,52,32,${alpha})`;
+    ctx.lineWidth = sz * 0.35;
+    ctx.lineJoin = 'round';
+    ctx.strokeText(`${comboCount} COMBO!`, GAME_W / 2, GAME_H / 2 - 60);
+    ctx.fillStyle = `rgba(255,100,100,${alpha})`;
     ctx.fillText(`${comboCount} COMBO!`, GAME_W / 2, GAME_H / 2 - 60);
   }
 
