@@ -206,9 +206,6 @@ function saveHighScore(s: number) {
   localStorage.setItem('granularity_highscore', JSON.stringify({ date: getTodayKey(), score: s }));
 }
 
-let highScore = loadHighScore();
-highScoreEl.textContent = `今日のハイスコア: ${highScore}`;
-
 // ================================================================
 // DOM
 // ================================================================
@@ -230,6 +227,9 @@ const paramsEl = document.getElementById('grading-params')!;
 const btnHooke = document.getElementById('btn-hooke') as HTMLButtonElement;
 const btnHertz = document.getElementById('btn-hertz') as HTMLButtonElement;
 const chkForces = document.getElementById('chk-forces') as HTMLInputElement;
+
+let highScore = loadHighScore();
+highScoreEl.textContent = `今日のハイスコア: ${highScore}`;
 
 // ================================================================
 // DEM Physics
