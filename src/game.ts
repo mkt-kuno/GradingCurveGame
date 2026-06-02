@@ -789,8 +789,8 @@ function drawGame() {
 
   const dAlpha = dangerTimer > 0 ? 0.25 + 0.5 * Math.abs(Math.sin(Date.now() / 130)) : 0.15;
   ctx.strokeStyle = `rgba(255,60,60,${dAlpha})`;
-  ctx.lineWidth = 2;
-  ctx.setLineDash([8, 5]);
+  ctx.lineWidth = 5;
+  ctx.setLineDash([12, 6]);
   ctx.beginPath();
   ctx.moveTo(CL, DANGER_Y);
   ctx.lineTo(CR, DANGER_Y);
