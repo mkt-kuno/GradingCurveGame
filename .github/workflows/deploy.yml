@@ -30,9 +30,12 @@ jobs:
 
       - name: Prepare deploy directory
         run: |
-          mkdir -p _deploy/dist
+          mkdir -p _deploy/dist _deploy/icons
           cp index.html _deploy/
           cp dist/game.js _deploy/dist/
+          cp sw.js _deploy/
+          cp manifest.json _deploy/
+          cp icons/icon.svg _deploy/icons/
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
