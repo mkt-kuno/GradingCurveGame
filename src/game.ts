@@ -23,18 +23,19 @@ interface ParticleLevel {
 }
 
 const LEVELS: ParticleLevel[] = [
-  { name: '細礫',   sieve: '2mm',     upperSieveMM: 4.75,  radius: 30, color: '#F8EED8', strokeColor: '#C4B49C', score: 1 },
-  { name: '中礫',   sieve: '4.75mm',  upperSieveMM: 9.5,   radius: 42, color: '#F5E6CC', strokeColor: '#B8A48A', score: 2 },
-  { name: '中礫',   sieve: '9.5mm',   upperSieveMM: 19,    radius: 60, color: '#EAD5B8', strokeColor: '#A89070', score: 4 },
-  { name: '粗礫',   sieve: '19mm',    upperSieveMM: 26.5,  radius: 81, color: '#DCC4A0', strokeColor: '#9A7C5A', score: 7 },
-  { name: '粗礫',   sieve: '26.5mm',  upperSieveMM: 37.5,  radius: 105, color: '#D0B48E', strokeColor: '#8C6C46', score: 11 },
-  { name: '粗礫',   sieve: '37.5mm',  upperSieveMM: 53,    radius: 132, color: '#C2A47A', strokeColor: '#7E5E38', score: 16 },
-  { name: '粗礫',   sieve: '53mm',    upperSieveMM: 75,    radius: 162, color: '#B49468', strokeColor: '#6E5030', score: 22 },
-  { name: '石分',   sieve: '75mm',    upperSieveMM: 100,   radius: 195, color: '#A28458', strokeColor: '#5E4228', score: 29 },
-  { name: '石分',   sieve: '100mm+',  upperSieveMM: 150,   radius: 231, color: '#907448', strokeColor: '#4E3420', score: 37 },
+  { name: '砂',     sieve: '0.75mm',  upperSieveMM: 2,     radius: 22, color: '#FDF5E6', strokeColor: '#C8B89C', score: 1 },
+  { name: '細礫',   sieve: '2mm',     upperSieveMM: 4.75,  radius: 30, color: '#F8EED8', strokeColor: '#C4B49C', score: 2 },
+  { name: '中礫',   sieve: '4.75mm',  upperSieveMM: 9.5,   radius: 42, color: '#F5E6CC', strokeColor: '#B8A48A', score: 4 },
+  { name: '中礫',   sieve: '9.5mm',   upperSieveMM: 19,    radius: 60, color: '#EAD5B8', strokeColor: '#A89070', score: 7 },
+  { name: '粗礫',   sieve: '19mm',    upperSieveMM: 26.5,  radius: 81, color: '#DCC4A0', strokeColor: '#9A7C5A', score: 11 },
+  { name: '粗礫',   sieve: '26.5mm',  upperSieveMM: 37.5,  radius: 105, color: '#D0B48E', strokeColor: '#8C6C46', score: 16 },
+  { name: '粗礫',   sieve: '37.5mm',  upperSieveMM: 53,    radius: 132, color: '#C2A47A', strokeColor: '#7E5E38', score: 22 },
+  { name: '粗礫',   sieve: '53mm',    upperSieveMM: 75,    radius: 162, color: '#B49468', strokeColor: '#6E5030', score: 29 },
+  { name: '石分',   sieve: '75mm',    upperSieveMM: 100,   radius: 195, color: '#A28458', strokeColor: '#5E4228', score: 37 },
+  { name: '石分',   sieve: '100mm+',  upperSieveMM: 150,   radius: 231, color: '#907448', strokeColor: '#4E3420', score: 46 },
 ];
 
-const SIEVE_SIZES = [2, 4.75, 9.5, 19, 26.5, 37.5, 53, 75];
+const SIEVE_SIZES = [0.75, 2, 4.75, 9.5, 19, 26.5, 37.5, 53, 75];
 
 // ================================================================
 // Game Dimensions — 1:1 container (792 x 792 inner)
@@ -901,14 +902,14 @@ function drawGradingChart() {
     ctx.stroke();
   }
 
-  const logMin = Math.log10(1);
-  const logMax = Math.log10(150);
+  const logMin = Math.log10(0.5);
+  const logMax = Math.log10(100);
 
   function toX(mm: number): number {
     return pad.left + ((Math.log10(mm) - logMin) / (logMax - logMin)) * pW;
   }
 
-  const xTicks = [1, 2, 4.75, 9.5, 19, 26.5, 37.5, 53, 75, 100];
+  const xTicks = [0.5, 0.75, 2, 4.75, 9.5, 19, 26.5, 37.5, 53, 75, 100];
   ctx.textAlign = 'center';
   ctx.textBaseline = 'top';
   for (const s of xTicks) {
@@ -955,11 +956,11 @@ function drawGradingChart() {
   }
 
   const points: { x: number; y: number }[] = [];
-  points.push({ x: 150, y: 100 });
+  points.push({ x: 100, y: 100 });
   for (let i = SIEVE_SIZES.length - 1; i >= 0; i--) {
     points.push({ x: SIEVE_SIZES[i], y: (cumMass[i] / totalMass) * 100 });
   }
-  points.push({ x: 0.8, y: 0 });
+  points.push({ x: 0.5, y: 0 });
   points.sort((a, b) => a.x - b.x);
 
   ctx.strokeStyle = '#8B6F47';
