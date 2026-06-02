@@ -23,33 +23,34 @@ interface ParticleLevel {
 }
 
 const LEVELS: ParticleLevel[] = [
-  { name: '細粒分', sieve: '<4.75mm', upperSieveMM: 4.75,  radius: 28, color: '#F5E6CC', strokeColor: '#B8A48A', score: 1 },
-  { name: '細礫',   sieve: '4.75mm',  upperSieveMM: 9.5,   radius: 40, color: '#EAD5B8', strokeColor: '#A89070', score: 3 },
-  { name: '小礫',   sieve: '9.5mm',   upperSieveMM: 19,    radius: 54, color: '#DCC4A0', strokeColor: '#9A7C5A', score: 6 },
-  { name: '中礫',   sieve: '19mm',    upperSieveMM: 26.5,  radius: 70, color: '#D0B48E', strokeColor: '#8C6C46', score: 10 },
-  { name: '粗礫',   sieve: '26.5mm',  upperSieveMM: 37.5,  radius: 88, color: '#C2A47A', strokeColor: '#7E5E38', score: 15 },
-  { name: '大礫',   sieve: '37.5mm',  upperSieveMM: 52,    radius: 108, color: '#B49468', strokeColor: '#6E5030', score: 21 },
-  { name: '巨礫',   sieve: '52mm',    upperSieveMM: 75,    radius: 130, color: '#A28458', strokeColor: '#5E4228', score: 28 },
-  { name: '転石',   sieve: '75mm+',   upperSieveMM: 100,   radius: 154, color: '#907448', strokeColor: '#4E3420', score: 36 },
+  { name: '細礫',   sieve: '2mm',     upperSieveMM: 4.75,  radius: 20, color: '#F8EED8', strokeColor: '#C4B49C', score: 1 },
+  { name: '中礫',   sieve: '4.75mm',  upperSieveMM: 9.5,   radius: 28, color: '#F5E6CC', strokeColor: '#B8A48A', score: 2 },
+  { name: '中礫',   sieve: '9.5mm',   upperSieveMM: 19,    radius: 40, color: '#EAD5B8', strokeColor: '#A89070', score: 4 },
+  { name: '粗礫',   sieve: '19mm',    upperSieveMM: 26.5,  radius: 54, color: '#DCC4A0', strokeColor: '#9A7C5A', score: 7 },
+  { name: '粗礫',   sieve: '26.5mm',  upperSieveMM: 37.5,  radius: 70, color: '#D0B48E', strokeColor: '#8C6C46', score: 11 },
+  { name: '粗礫',   sieve: '37.5mm',  upperSieveMM: 53,    radius: 88, color: '#C2A47A', strokeColor: '#7E5E38', score: 16 },
+  { name: '粗礫',   sieve: '53mm',    upperSieveMM: 75,    radius: 108, color: '#B49468', strokeColor: '#6E5030', score: 22 },
+  { name: '石分',   sieve: '75mm',    upperSieveMM: 100,   radius: 130, color: '#A28458', strokeColor: '#5E4228', score: 29 },
+  { name: '石分',   sieve: '100mm+',  upperSieveMM: 150,   radius: 154, color: '#907448', strokeColor: '#4E3420', score: 37 },
 ];
 
-const SIEVE_SIZES = [4.75, 9.5, 19, 26.5, 37.5, 52, 75];
+const SIEVE_SIZES = [2, 4.75, 9.5, 19, 26.5, 37.5, 53, 75];
 
 // ================================================================
-// Game Dimensions — 1:1 container (480 x 480 inner)
-// Canvas 520 x 560: 20px walls, 60px drop zone at top
+// Game Dimensions — 1:1 container (600 x 600 inner)
+// Canvas 650 x 700: 25px walls, 75px drop zone at top
 // ================================================================
 
-const GAME_W = 520;
-const GAME_H = 560;
-const WALL_T = 20;
+const GAME_W = 650;
+const GAME_H = 700;
+const WALL_T = 25;
 const CL = WALL_T;
-const CR = GAME_W - WALL_T;         // 500
-const CB = GAME_H - WALL_T;         // 540
-const CONTAINER_W = CR - CL;         // 480
-const CONTAINER_H = CB - WALL_T;     // 520... effectively ~480 of playable
-const DROP_Y = 45;
-const DANGER_Y = 75;
+const CR = GAME_W - WALL_T;         // 625
+const CB = GAME_H - WALL_T;         // 675
+const CONTAINER_W = CR - CL;         // 600
+const CONTAINER_H = CB - WALL_T;     // 650... effectively ~600 of playable
+const DROP_Y = 55;
+const DANGER_Y = 90;
 
 // ================================================================
 // Material Properties
@@ -88,14 +89,15 @@ const ESTAR_PW = 10000;           // 壁も珪砂 → PPと同じ
 const KN_PP = 100000;
 const KN_PW = 100000;             // 壁も珪砂 → PPと同じ
 
-const MU_PP = 0.45;               // 珪砂内部摩擦 (φ≈24°)
+const MU_PP = 0.65;               // 珪砂内部摩擦 (φ≈33°, tan33°≈0.65)
 const MU_PW = 0.80;               // 壁も珪砂 → 同じ
-const REST_PP = 0.50;             // 珪砂-珪砂反発係数
-const REST_PW = 0.50;             // 壁も珪砂 → 同じ
+const REST_PP = 0.35;             // 珪砂-珪砂反発係数 (文献: 0.3-0.5)
+const REST_PW = 0.35;             // 壁も珪砂 → 同じ
 
-// Rolling friction (CDT): μ_r ≈ 0.02-0.05 for sand
-const MU_ROLL_PP = 0.03;
-const MU_ROLL_PW = 0.15;          // 壁も珪砂 → 同じ
+// Rolling friction (CDT): μ_r for angular silica sand
+// Benmebarek (2023): 0.1-0.6; Gu (2020): ~0.2; Rorato (2021): image-based 0.1-0.3
+const MU_ROLL_PP = 0.15;         // PP: 珪砂粒子間 (文献範囲 0.1-0.2)
+const MU_ROLL_PW = 0.30;         // PW: 壁面 (文献範囲 0.2-0.4)
 
 // β = −ln(e) / √(π²+ln²(e))  (Tsuji damping)
 function beta(e: number): number {
@@ -840,7 +842,7 @@ function drawGradingChart() {
   const ctx = cCtx;
   const W = chartCanvas.width;
   const H = chartCanvas.height;
-  const pad = { top: 20, right: 16, bottom: 40, left: 46 };
+  const pad = { top: 24, right: 20, bottom: 48, left: 54 };
   const pW = W - pad.left - pad.right;
   const pH = H - pad.top - pad.bottom;
 

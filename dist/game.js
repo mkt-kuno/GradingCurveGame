@@ -1,36 +1,37 @@
 // src/game.ts
 var LEVELS = [
-  { name: "細粒分", sieve: "<4.75mm", upperSieveMM: 4.75, radius: 28, color: "#F5E6CC", strokeColor: "#B8A48A", score: 1 },
-  { name: "細礫", sieve: "4.75mm", upperSieveMM: 9.5, radius: 40, color: "#EAD5B8", strokeColor: "#A89070", score: 3 },
-  { name: "小礫", sieve: "9.5mm", upperSieveMM: 19, radius: 54, color: "#DCC4A0", strokeColor: "#9A7C5A", score: 6 },
-  { name: "中礫", sieve: "19mm", upperSieveMM: 26.5, radius: 70, color: "#D0B48E", strokeColor: "#8C6C46", score: 10 },
-  { name: "粗礫", sieve: "26.5mm", upperSieveMM: 37.5, radius: 88, color: "#C2A47A", strokeColor: "#7E5E38", score: 15 },
-  { name: "大礫", sieve: "37.5mm", upperSieveMM: 52, radius: 108, color: "#B49468", strokeColor: "#6E5030", score: 21 },
-  { name: "巨礫", sieve: "52mm", upperSieveMM: 75, radius: 130, color: "#A28458", strokeColor: "#5E4228", score: 28 },
-  { name: "転石", sieve: "75mm+", upperSieveMM: 100, radius: 154, color: "#907448", strokeColor: "#4E3420", score: 36 }
+  { name: "細砂", sieve: "2mm", upperSieveMM: 4.75, radius: 20, color: "#F8EED8", strokeColor: "#C4B49C", score: 1 },
+  { name: "細粒分", sieve: "<4.75mm", upperSieveMM: 4.75, radius: 28, color: "#F5E6CC", strokeColor: "#B8A48A", score: 2 },
+  { name: "細礫", sieve: "4.75mm", upperSieveMM: 9.5, radius: 40, color: "#EAD5B8", strokeColor: "#A89070", score: 4 },
+  { name: "小礫", sieve: "9.5mm", upperSieveMM: 19, radius: 54, color: "#DCC4A0", strokeColor: "#9A7C5A", score: 7 },
+  { name: "中礫", sieve: "19mm", upperSieveMM: 26.5, radius: 70, color: "#D0B48E", strokeColor: "#8C6C46", score: 11 },
+  { name: "粗礫", sieve: "26.5mm", upperSieveMM: 37.5, radius: 88, color: "#C2A47A", strokeColor: "#7E5E38", score: 16 },
+  { name: "大礫", sieve: "37.5mm", upperSieveMM: 53, radius: 108, color: "#B49468", strokeColor: "#6E5030", score: 22 },
+  { name: "巨礫", sieve: "53mm", upperSieveMM: 75, radius: 130, color: "#A28458", strokeColor: "#5E4228", score: 29 },
+  { name: "転石", sieve: "75mm+", upperSieveMM: 100, radius: 154, color: "#907448", strokeColor: "#4E3420", score: 37 }
 ];
-var SIEVE_SIZES = [4.75, 9.5, 19, 26.5, 37.5, 52, 75];
-var GAME_W = 520;
-var GAME_H = 560;
-var WALL_T = 20;
+var SIEVE_SIZES = [2, 4.75, 9.5, 19, 26.5, 37.5, 53, 75];
+var GAME_W = 650;
+var GAME_H = 700;
+var WALL_T = 25;
 var CL = WALL_T;
 var CR = GAME_W - WALL_T;
 var CB = GAME_H - WALL_T;
 var CONTAINER_W = CR - CL;
 var CONTAINER_H = CB - WALL_T;
-var DROP_Y = 45;
-var DANGER_Y = 75;
+var DROP_Y = 55;
+var DANGER_Y = 90;
 var GRAVITY = 700;
 var ESTAR_PP = 1e4;
 var ESTAR_PW = 1e4;
 var KN_PP = 1e5;
 var KN_PW = 1e5;
-var MU_PP = 0.45;
+var MU_PP = 0.65;
 var MU_PW = 0.8;
-var REST_PP = 0.5;
-var REST_PW = 0.5;
-var MU_ROLL_PP = 0.03;
-var MU_ROLL_PW = 0.15;
+var REST_PP = 0.35;
+var REST_PW = 0.35;
+var MU_ROLL_PP = 0.15;
+var MU_ROLL_PW = 0.3;
 function beta(e) {
   if (e <= 0)
     return 1;
@@ -562,7 +563,7 @@ function drawGradingChart() {
   const ctx = cCtx;
   const W = chartCanvas.width;
   const H = chartCanvas.height;
-  const pad = { top: 20, right: 16, bottom: 40, left: 46 };
+  const pad = { top: 24, right: 20, bottom: 48, left: 54 };
   const pW = W - pad.left - pad.right;
   const pH = H - pad.top - pad.bottom;
   ctx.fillStyle = "#f5f5f5";
