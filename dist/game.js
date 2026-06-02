@@ -1,48 +1,55 @@
 // src/game.ts
 var LEVELS = [
-  { name: "細粒分", sieve: "<4.75mm", upperSieveMM: 4.75, radius: 14, color: "#F5CBA7", strokeColor: "#C9956A", score: 1 },
-  { name: "細礫", sieve: "4.75mm", upperSieveMM: 9.5, radius: 20, color: "#F0B27A", strokeColor: "#C97833", score: 3 },
-  { name: "小礫", sieve: "9.5mm", upperSieveMM: 19, radius: 27, color: "#E67E22", strokeColor: "#BA6518", score: 6 },
-  { name: "中礫", sieve: "19mm", upperSieveMM: 26.5, radius: 35, color: "#E74C3C", strokeColor: "#B83227", score: 10 },
-  { name: "粗礫", sieve: "26.5mm", upperSieveMM: 37.5, radius: 44, color: "#AF7AC5", strokeColor: "#7D3C98", score: 15 },
-  { name: "大礫", sieve: "37.5mm", upperSieveMM: 52, radius: 54, color: "#5DADE2", strokeColor: "#2874A6", score: 21 },
-  { name: "巨礫", sieve: "52mm", upperSieveMM: 75, radius: 65, color: "#58D68D", strokeColor: "#1E8449", score: 28 },
-  { name: "転石", sieve: "75mm+", upperSieveMM: 100, radius: 77, color: "#F7DC6F", strokeColor: "#B7950B", score: 36 }
+  { name: "細粒分", sieve: "<4.75mm", upperSieveMM: 4.75, radius: 28, color: "#F5E6CC", strokeColor: "#B8A48A", score: 1 },
+  { name: "細礫", sieve: "4.75mm", upperSieveMM: 9.5, radius: 40, color: "#EAD5B8", strokeColor: "#A89070", score: 3 },
+  { name: "小礫", sieve: "9.5mm", upperSieveMM: 19, radius: 54, color: "#DCC4A0", strokeColor: "#9A7C5A", score: 6 },
+  { name: "中礫", sieve: "19mm", upperSieveMM: 26.5, radius: 70, color: "#D0B48E", strokeColor: "#8C6C46", score: 10 },
+  { name: "粗礫", sieve: "26.5mm", upperSieveMM: 37.5, radius: 88, color: "#C2A47A", strokeColor: "#7E5E38", score: 15 },
+  { name: "大礫", sieve: "37.5mm", upperSieveMM: 52, radius: 108, color: "#B49468", strokeColor: "#6E5030", score: 21 },
+  { name: "巨礫", sieve: "52mm", upperSieveMM: 75, radius: 130, color: "#A28458", strokeColor: "#5E4228", score: 28 },
+  { name: "転石", sieve: "75mm+", upperSieveMM: 100, radius: 154, color: "#907448", strokeColor: "#4E3420", score: 36 }
 ];
 var SIEVE_SIZES = [4.75, 9.5, 19, 26.5, 37.5, 52, 75];
-var GAME_W = 450;
-var GAME_H = 700;
-var WALL_T = 25;
+var GAME_W = 520;
+var GAME_H = 560;
+var WALL_T = 20;
 var CL = WALL_T;
 var CR = GAME_W - WALL_T;
 var CB = GAME_H - WALL_T;
-var DROP_Y = 55;
-var DANGER_Y = 95;
+var CONTAINER_W = CR - CL;
+var CONTAINER_H = CB - WALL_T;
+var DROP_Y = 45;
+var DANGER_Y = 75;
 var GRAVITY = 700;
-var ESTAR_PP = 2000;
-var ESTAR_PW = 200;
-var KN_PP = 25000;
-var KN_PW = 2500;
+var ESTAR_PP = 1e4;
+var ESTAR_PW = 1200;
+var KN_PP = 1e5;
+var KN_PW = 15000;
 var MU_PP = 0.45;
 var MU_PW = 0.7;
-var RESTITUTION_PP = 0.5;
-var RESTITUTION_PW = 0.55;
+var REST_PP = 0.5;
+var REST_PW = 0.55;
+var MU_ROLL_PP = 0.03;
+var MU_ROLL_PW = 0.05;
 function beta(e) {
   if (e <= 0)
     return 1;
   if (e >= 1)
     return 0;
-  const lnE = Math.log(e);
-  return -lnE / Math.sqrt(Math.PI * Math.PI + lnE * lnE);
+  const ln = Math.log(e);
+  return -ln / Math.sqrt(Math.PI * Math.PI + ln * ln);
 }
-var BETA_PP = beta(RESTITUTION_PP);
-var BETA_PW = beta(RESTITUTION_PW);
-var KT_RATIO = 4 * (1 - 0.17) / (2 - 0.17);
-var SUB_STEPS = 8;
-var AIR_DRAG = 0.9992;
+var BETA_PP = beta(REST_PP);
+var BETA_PW = beta(REST_PW);
+var SUB_STEPS = 10;
+var MAX_DELTA_RATIO = 0.08;
+var MAX_VEL = 3000;
+var MAX_OMEGA = 80;
+var VEL_DAMP = 0.9995;
+var ANG_DAMP = 0.998;
 var particles = [];
 var nextId = 0;
-var activeContacts = [];
+var contactVis = [];
 var effects = [];
 var scorePopups = [];
 var mergeQueue = [];
@@ -53,12 +60,12 @@ var nextLevel = 0;
 var dropX = GAME_W / 2;
 var canDrop = true;
 var gameOver = false;
-var dangerTimer = 0;
 var mergeCount = 0;
 var contactModel = "hertz";
 var showForceChains = false;
 var comboCount = 0;
 var comboTimer = 0;
+var pendingGameOver = false;
 var gameCanvas = document.getElementById("game-canvas");
 var gCtx = gameCanvas.getContext("2d");
 var chartCanvas = document.getElementById("chart-canvas");
@@ -77,6 +84,7 @@ var btnHertz = document.getElementById("btn-hertz");
 var chkForces = document.getElementById("chk-forces");
 function createParticle(x, y, level) {
   const r = LEVELS[level].radius;
+  const m = r * r * 0.008;
   return {
     id: nextId++,
     x,
@@ -84,32 +92,45 @@ function createParticle(x, y, level) {
     vx: 0,
     vy: 0,
     radius: r,
-    mass: r * r * 0.012,
+    mass: m,
+    inertia: 0.5 * m * r * r,
     level,
-    angle: 0
+    angle: 0,
+    omega: 0,
+    active: false
   };
 }
 function pairKey(a, b) {
   return a < b ? `${a}_${b}` : `${b}_${a}`;
 }
+function clamp(v, lo, hi) {
+  return v < lo ? lo : v > hi ? hi : v;
+}
+function hertzNormalForce(delta, rEff, eStar) {
+  return 4 / 3 * eStar * Math.sqrt(Math.max(rEff, 0.1)) * Math.pow(Math.max(delta, 0), 1.5);
+}
+function hookeNormalForce(delta, kn) {
+  return kn * delta;
+}
 function computeNormalForce(delta, rEff, mEff, vn, eStar, kn, b) {
   if (delta <= 0)
     return 0;
-  let fn_elastic;
-  let kn_eff;
+  let fElastic;
+  let kEff;
   if (contactModel === "hertz") {
-    fn_elastic = 4 / 3 * eStar * Math.sqrt(rEff) * Math.pow(delta, 1.5);
-    kn_eff = 2 * eStar * Math.sqrt(rEff * delta);
+    fElastic = hertzNormalForce(delta, rEff, eStar);
+    kEff = 2 * eStar * Math.sqrt(Math.max(rEff * delta, 0.01));
   } else {
-    fn_elastic = kn * delta;
-    kn_eff = kn;
+    fElastic = hookeNormalForce(delta, kn);
+    kEff = kn;
   }
-  const cn = 2 * b * Math.sqrt(mEff * kn_eff);
-  return Math.max(0, fn_elastic - cn * vn);
+  const eta = 2 * b * Math.sqrt(Math.max(mEff * kEff, 0.001));
+  return Math.max(0, fElastic - eta * vn);
 }
 function physicsStep(dt) {
-  const newContacts = [];
+  const newContactVis = [];
   const newPairs = new Set;
+  pendingGameOver = false;
   for (const p of particles) {
     p.vy += GRAVITY * dt;
   }
@@ -124,40 +145,51 @@ function physicsStep(dt) {
       if (distSq >= minDist * minDist)
         continue;
       const dist = Math.sqrt(Math.max(distSq, 0.00000001));
-      const delta = minDist - dist;
+      let delta = minDist - dist;
       if (delta <= 0)
         continue;
+      const maxDelta = MAX_DELTA_RATIO * Math.min(a.radius, b.radius);
+      delta = Math.min(delta, maxDelta);
       const nx = dx / dist;
       const ny = dy / dist;
+      const tx = -ny;
+      const ty = nx;
       const dvx = b.vx - a.vx;
       const dvy = b.vy - a.vy;
       const vn = dvx * nx + dvy * ny;
-      const vtx = dvx - vn * nx;
-      const vty = dvy - vn * ny;
-      const vtMag = Math.sqrt(vtx * vtx + vty * vty);
+      const vSlide = dvx * tx + dvy * ty - a.omega * a.radius - b.omega * b.radius;
       const mEff = a.mass * b.mass / (a.mass + b.mass);
       const rEff = a.radius * b.radius / (a.radius + b.radius);
       const fn = computeNormalForce(delta, rEff, mEff, vn, ESTAR_PP, KN_PP, BETA_PP);
-      let ft = 0;
-      if (vtMag > 0.001) {
-        ft = Math.min(MU_PP * fn, mEff * vtMag / dt);
-      }
-      const fx = fn * nx - ft * (vtMag > 0.001 ? vtx / vtMag : 0);
-      const fy = fn * ny - ft * (vtMag > 0.001 ? vty / vtMag : 0);
+      const ftDamp = 2 * BETA_PP * Math.sqrt(Math.max(mEff * ESTAR_PP, 0.001)) * 0.5;
+      const ftMag = Math.min(MU_PP * fn, ftDamp * Math.abs(vSlide));
+      const ftSign = vSlide > 0.001 ? -1 : vSlide < -0.001 ? 1 : 0;
+      const fx = fn * nx + ftSign * ftMag * tx;
+      const fy = fn * ny + ftSign * ftMag * ty;
       b.vx += fx / b.mass * dt;
       b.vy += fy / b.mass * dt;
       a.vx -= fx / a.mass * dt;
       a.vy -= fy / a.mass * dt;
+      const torqueSign = vSlide > 0.001 ? 1 : vSlide < -0.001 ? -1 : 0;
+      const torqueMag = ftMag;
+      a.omega += torqueSign * torqueMag * a.radius / a.inertia * dt;
+      b.omega += torqueSign * torqueMag * b.radius / b.inertia * dt;
+      const omegaRel = b.omega - a.omega;
+      if (Math.abs(omegaRel) > 0.01) {
+        const tauRoll = MU_ROLL_PP * rEff * fn;
+        const rollSign = omegaRel > 0 ? 1 : -1;
+        const rollImpulse = Math.min(tauRoll * dt, Math.abs(omegaRel) * 0.5 * (a.inertia * b.inertia) / (a.inertia + b.inertia));
+        a.omega += rollSign * rollImpulse / a.inertia;
+        b.omega -= rollSign * rollImpulse / b.inertia;
+      }
       const totalM = a.mass + b.mass;
-      const corr = delta * 0.4;
+      const corr = delta * 0.2;
       a.x -= nx * corr * (b.mass / totalM);
       a.y -= ny * corr * (b.mass / totalM);
       b.x += nx * corr * (a.mass / totalM);
       b.y += ny * corr * (a.mass / totalM);
       const fMag = Math.sqrt(fx * fx + fy * fy);
-      newContacts.push({
-        idA: a.id,
-        idB: b.id,
+      newContactVis.push({
         x: (a.x * b.radius + b.x * a.radius) / (a.radius + b.radius),
         y: (a.y * b.radius + b.y * a.radius) / (a.radius + b.radius),
         force: fMag
@@ -167,44 +199,98 @@ function physicsStep(dt) {
       if (!contactedPairs.has(key) && a.level === b.level) {
         mergeQueue.push([a.id, b.id]);
       }
+      if (!pendingGameOver) {
+        const aAbove = a.y < DANGER_Y;
+        const bAbove = b.y < DANGER_Y;
+        if (!a.active && aAbove)
+          pendingGameOver = true;
+        if (!b.active && bAbove)
+          pendingGameOver = true;
+      }
     }
   }
   for (const p of particles) {
     const oBot = p.y + p.radius - CB;
     if (oBot > 0) {
+      const d = Math.min(oBot, MAX_DELTA_RATIO * p.radius);
       const vn = -p.vy;
-      const fn = computeNormalForce(oBot, p.radius, p.mass, vn, ESTAR_PW, KN_PW, BETA_PW);
+      const fn = computeNormalForce(d, p.radius, p.mass, vn, ESTAR_PW, KN_PW, BETA_PW);
       p.vy -= fn / p.mass * dt;
-      if (Math.abs(p.vx) > 0.01) {
-        const ft = Math.min(MU_PW * fn, p.mass * Math.abs(p.vx) / dt);
-        p.vx -= Math.sign(p.vx) * (ft / p.mass) * dt;
+      const vSlide = p.vx + p.omega * p.radius;
+      if (Math.abs(vSlide) > 0.01) {
+        const ftMax = MU_PW * fn;
+        const ft = Math.min(ftMax, Math.abs(vSlide) * p.mass / dt * 0.5);
+        p.vx -= Math.sign(vSlide) * (ft / p.mass) * dt;
+        p.omega -= Math.sign(vSlide) * (ft * p.radius / p.inertia) * dt;
+      }
+      if (Math.abs(p.omega) > 0.01) {
+        const tauR = MU_ROLL_PW * p.radius * fn;
+        const imp = Math.min(tauR * dt, Math.abs(p.omega) * p.inertia * 0.5);
+        p.omega -= Math.sign(p.omega) * imp / p.inertia;
       }
       p.y = Math.min(p.y, CB - p.radius);
     }
-    const oLeft = CL - (p.x - p.radius);
-    if (oLeft > 0) {
+    const oL = CL - (p.x - p.radius);
+    if (oL > 0) {
+      const d = Math.min(oL, MAX_DELTA_RATIO * p.radius);
       const vn = p.vx;
-      const fn = computeNormalForce(oLeft, p.radius, p.mass, vn, ESTAR_PW, KN_PW, BETA_PW);
+      const fn = computeNormalForce(d, p.radius, p.mass, vn, ESTAR_PW, KN_PW, BETA_PW);
       p.vx += fn / p.mass * dt;
+      const vSlide = p.vy + p.omega * p.radius;
+      if (Math.abs(vSlide) > 0.01) {
+        const ft = Math.min(MU_PW * fn, Math.abs(vSlide) * p.mass / dt * 0.5);
+        p.vy -= Math.sign(vSlide) * (ft / p.mass) * dt;
+        p.omega -= Math.sign(vSlide) * (ft * p.radius / p.inertia) * dt;
+      }
       p.x = Math.max(p.x, CL + p.radius);
     }
-    const oRight = p.x + p.radius - CR;
-    if (oRight > 0) {
+    const oR = p.x + p.radius - CR;
+    if (oR > 0) {
+      const d = Math.min(oR, MAX_DELTA_RATIO * p.radius);
       const vn = -p.vx;
-      const fn = computeNormalForce(oRight, p.radius, p.mass, vn, ESTAR_PW, KN_PW, BETA_PW);
+      const fn = computeNormalForce(d, p.radius, p.mass, vn, ESTAR_PW, KN_PW, BETA_PW);
       p.vx -= fn / p.mass * dt;
+      const vSlide = -(p.vy - p.omega * p.radius);
+      if (Math.abs(vSlide) > 0.01) {
+        const ft = Math.min(MU_PW * fn, Math.abs(vSlide) * p.mass / dt * 0.5);
+        p.vy += Math.sign(vSlide) * (ft / p.mass) * dt;
+        p.omega += Math.sign(vSlide) * (ft * p.radius / p.inertia) * dt;
+      }
       p.x = Math.min(p.x, CR - p.radius);
     }
   }
   for (const p of particles) {
-    p.vx *= AIR_DRAG;
-    p.vy *= AIR_DRAG;
+    p.vx *= VEL_DAMP;
+    p.vy *= VEL_DAMP;
+    p.omega *= ANG_DAMP;
+    p.vx = clamp(p.vx, -MAX_VEL, MAX_VEL);
+    p.vy = clamp(p.vy, -MAX_VEL, MAX_VEL);
+    p.omega = clamp(p.omega, -MAX_OMEGA, MAX_OMEGA);
     p.x += p.vx * dt;
     p.y += p.vy * dt;
-    p.angle += p.vx / Math.max(p.radius, 1) * dt;
+    p.angle += p.omega * dt;
+    if (!p.active && p.y > DANGER_Y) {
+      p.active = true;
+    }
   }
-  activeContacts = newContacts;
+  contactVis = newContactVis;
   contactedPairs = newPairs;
+}
+function checkGameOver() {
+  if (pendingGameOver) {
+    gameOver = true;
+    finalScoreEl.textContent = score.toString();
+    gameOverEl.style.display = "flex";
+    return;
+  }
+  for (const p of particles) {
+    if (p.active && p.y < DANGER_Y) {
+      gameOver = true;
+      finalScoreEl.textContent = score.toString();
+      gameOverEl.style.display = "flex";
+      return;
+    }
+  }
 }
 function processMerges() {
   const consumed = new Set;
@@ -228,18 +314,18 @@ function processMerges() {
       comboCount++;
       comboTimer = 45;
       effects.push({ x: mx, y: my, r: 10, alpha: 1, color: "#FFFFFF" });
-      effects.push({ x: mx, y: my, r: 30, alpha: 0.7, color: "#F7DC6F" });
+      effects.push({ x: mx, y: my, r: 30, alpha: 0.7, color: "#F5E6CC" });
       scorePopups.push({ x: mx, y: my, text: `+${pts2} MAX!`, timer: 90 });
       scoreEl.textContent = score.toString();
       mergeEl.textContent = `合体回数: ${mergeCount}`;
       continue;
     }
     const tm = a.mass + b.mass;
-    const nvx = (a.vx * a.mass + b.vx * b.mass) / tm;
-    const nvy = (a.vy * a.mass + b.vy * b.mass) / tm;
     const np = createParticle(mx, my, newLevel);
-    np.vx = nvx;
-    np.vy = nvy - 40;
+    np.vx = (a.vx * a.mass + b.vx * b.mass) / tm;
+    np.vy = (a.vy * a.mass + b.vy * b.mass) / tm - 30;
+    np.omega = (a.omega * a.inertia + b.omega * b.inertia) / (a.inertia + b.inertia);
+    np.active = a.active || b.active;
     particles.push(np);
     effects.push({ x: mx, y: my, r: LEVELS[newLevel].radius * 0.3, alpha: 1, color: LEVELS[newLevel].color });
     comboCount++;
@@ -282,36 +368,17 @@ function drop() {
   setTimeout(() => {
     if (!gameOver)
       canDrop = true;
-  }, 450);
-}
-function checkGameOver() {
-  let above = false;
-  for (const p of particles) {
-    const spd = Math.sqrt(p.vx * p.vx + p.vy * p.vy);
-    if (spd < 80 && p.y - p.radius < DANGER_Y) {
-      above = true;
-      break;
-    }
-  }
-  if (above) {
-    dangerTimer++;
-    if (dangerTimer > 90) {
-      gameOver = true;
-      finalScoreEl.textContent = score.toString();
-      gameOverEl.style.display = "flex";
-    }
-  } else {
-    dangerTimer = Math.max(0, dangerTimer - 2);
-  }
+  }, 500);
 }
 function restart() {
   particles = [];
-  activeContacts = [];
+  contactVis = [];
   effects = [];
   scorePopups = [];
   mergeQueue = [];
   contactedPairs.clear();
   nextId = 0;
+  pendingGameOver = false;
   score = 0;
   currentLevel = getRandomLevel();
   nextLevel = getRandomLevel();
@@ -355,10 +422,10 @@ function drawParticle(ctx, x, y, angle, level) {
   ctx.rotate(angle);
   ctx.beginPath();
   ctx.arc(2, 3, r, 0, Math.PI * 2);
-  ctx.fillStyle = "rgba(0,0,0,0.18)";
+  ctx.fillStyle = "rgba(0,0,0,0.15)";
   ctx.fill();
   const grad = ctx.createRadialGradient(-r * 0.25, -r * 0.25, r * 0.05, 0, 0, r);
-  grad.addColorStop(0, lighten(info.color, 40));
+  grad.addColorStop(0, lighten(info.color, 35));
   grad.addColorStop(1, info.color);
   ctx.beginPath();
   ctx.arc(0, 0, r, 0, Math.PI * 2);
@@ -374,19 +441,20 @@ function drawParticle(ctx, x, y, angle, level) {
     const ddy = (rng() - 0.5) * r * 1.4;
     if (ddx * ddx + ddy * ddy < (r * 0.7) ** 2) {
       ctx.beginPath();
-      ctx.arc(ddx, ddy, Math.max(1, r * 0.055), 0, Math.PI * 2);
-      ctx.fillStyle = hexToRGBA(info.strokeColor, 0.35);
+      ctx.arc(ddx, ddy, Math.max(1, r * 0.05), 0, Math.PI * 2);
+      ctx.fillStyle = hexToRGBA(info.strokeColor, 0.3);
       ctx.fill();
     }
   }
-  const fontSize = Math.max(7, Math.floor(r * 0.34));
+  const fontSize = Math.max(8, Math.floor(r * 0.3));
   ctx.font = `bold ${fontSize}px sans-serif`;
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  ctx.fillStyle = "#222";
+  ctx.fillStyle = "#3E2723";
   ctx.fillText(info.sieve, 0, 0);
   ctx.restore();
 }
+var dangerTimer = 0;
 function drawGame() {
   const ctx = gCtx;
   ctx.fillStyle = "#0f0f23";
@@ -395,7 +463,7 @@ function drawGame() {
   bgGrad.addColorStop(0, "#151530");
   bgGrad.addColorStop(1, "#0d0d20");
   ctx.fillStyle = bgGrad;
-  ctx.fillRect(CL, 0, CR - CL, GAME_H);
+  ctx.fillRect(CL, 0, CONTAINER_W, GAME_H);
   ctx.fillStyle = "#1e1e45";
   ctx.fillRect(0, 0, WALL_T, GAME_H);
   ctx.fillRect(CR, 0, WALL_T, GAME_H);
@@ -420,13 +488,13 @@ function drawGame() {
   ctx.fillStyle = `rgba(255,60,60,${dAlpha * 0.7})`;
   ctx.font = "9px sans-serif";
   ctx.textAlign = "right";
-  ctx.fillText("DANGER", CR - 4, DANGER_Y - 4);
-  if (showForceChains && activeContacts.length > 0) {
-    const maxF = Math.max(...activeContacts.map((c) => c.force), 1);
-    for (const c of activeContacts) {
+  ctx.fillText("DEAD LINE", CR - 4, DANGER_Y - 4);
+  if (showForceChains && contactVis.length > 0) {
+    const maxF = Math.max(...contactVis.map((c) => c.force), 1);
+    for (const c of contactVis) {
       const t = Math.min(c.force / maxF, 1);
       const w = 1 + t * 5;
-      ctx.strokeStyle = `rgba(${Math.floor(50 + 205 * t)},${Math.floor(200 * (1 - t))},${Math.floor(255 * (1 - t))},${0.3 + t * 0.5})`;
+      ctx.strokeStyle = `rgba(${Math.floor(80 + 175 * t)},${Math.floor(150 * (1 - t))},${Math.floor(200 * (1 - t))},${0.3 + t * 0.5})`;
       ctx.lineWidth = w;
       ctx.beginPath();
       ctx.arc(c.x, c.y, w * 2, 0, Math.PI * 2);
@@ -569,7 +637,7 @@ function drawGradingChart() {
   }
   points.push({ x: 0.8, y: 0 });
   points.sort((a, b) => a.x - b.x);
-  ctx.strokeStyle = "#e74c3c";
+  ctx.strokeStyle = "#8B6F47";
   ctx.lineWidth = 2.5;
   ctx.beginPath();
   for (let i = 0;i < points.length; i++) {
@@ -581,7 +649,7 @@ function drawGradingChart() {
       ctx.lineTo(px, py);
   }
   ctx.stroke();
-  ctx.fillStyle = "rgba(231,76,60,0.1)";
+  ctx.fillStyle = "rgba(139,111,71,0.1)";
   ctx.beginPath();
   for (let i = 0;i < points.length; i++) {
     const px = toX(points[i].x);
@@ -600,7 +668,7 @@ function drawGradingChart() {
     const py = pad.top + pH - points[i].y / 100 * pH;
     ctx.beginPath();
     ctx.arc(px, py, 2.5, 0, Math.PI * 2);
-    ctx.fillStyle = "#c0392b";
+    ctx.fillStyle = "#6B5235";
     ctx.fill();
   }
   const d10 = interpD(10, points);

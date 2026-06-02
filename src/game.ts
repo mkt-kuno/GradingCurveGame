@@ -1,12 +1,15 @@
 // ================================================================
 // 粒度分布ゲーム - 土質工学スイカゲーム
 // DEM (Discrete Element Method) Physics Engine
-// Contact Models: Hooke (linear) / Hertz (non-linear)
-// References: Tsuji et al. (1992), LAMMPS pair_gran
+// Contact: Hooke (linear) / Hertz (non-linear) + Tsuji damping
+// Integration: Velocity-Verlet (position-Verlet variant)
+// Tangential: Coulomb friction with rotational sliding
+// Rolling friction: CDT model
+// References: Tsuji et al.(1992), Silbert et al.(2001), LAMMPS pair_granular
 // ================================================================
 
 // ================================================================
-// Particle Level Definitions (JIS A 1204 ふるい寸法)
+// Particle Levels (JIS A 1204, radii x2)
 // ================================================================
 
 interface ParticleLevel {
@@ -20,102 +23,83 @@ interface ParticleLevel {
 }
 
 const LEVELS: ParticleLevel[] = [
-  { name: '細粒分', sieve: '<4.75mm', upperSieveMM: 4.75,  radius: 14, color: '#F5CBA7', strokeColor: '#C9956A', score: 1 },
-  { name: '細礫',   sieve: '4.75mm',  upperSieveMM: 9.5,   radius: 20, color: '#F0B27A', strokeColor: '#C97833', score: 3 },
-  { name: '小礫',   sieve: '9.5mm',   upperSieveMM: 19,    radius: 27, color: '#E67E22', strokeColor: '#BA6518', score: 6 },
-  { name: '中礫',   sieve: '19mm',    upperSieveMM: 26.5,  radius: 35, color: '#E74C3C', strokeColor: '#B83227', score: 10 },
-  { name: '粗礫',   sieve: '26.5mm',  upperSieveMM: 37.5,  radius: 44, color: '#AF7AC5', strokeColor: '#7D3C98', score: 15 },
-  { name: '大礫',   sieve: '37.5mm',  upperSieveMM: 52,    radius: 54, color: '#5DADE2', strokeColor: '#2874A6', score: 21 },
-  { name: '巨礫',   sieve: '52mm',    upperSieveMM: 75,    radius: 65, color: '#58D68D', strokeColor: '#1E8449', score: 28 },
-  { name: '転石',   sieve: '75mm+',   upperSieveMM: 100,   radius: 77, color: '#F7DC6F', strokeColor: '#B7950B', score: 36 },
+  { name: '細粒分', sieve: '<4.75mm', upperSieveMM: 4.75,  radius: 28, color: '#F5E6CC', strokeColor: '#B8A48A', score: 1 },
+  { name: '細礫',   sieve: '4.75mm',  upperSieveMM: 9.5,   radius: 40, color: '#EAD5B8', strokeColor: '#A89070', score: 3 },
+  { name: '小礫',   sieve: '9.5mm',   upperSieveMM: 19,    radius: 54, color: '#DCC4A0', strokeColor: '#9A7C5A', score: 6 },
+  { name: '中礫',   sieve: '19mm',    upperSieveMM: 26.5,  radius: 70, color: '#D0B48E', strokeColor: '#8C6C46', score: 10 },
+  { name: '粗礫',   sieve: '26.5mm',  upperSieveMM: 37.5,  radius: 88, color: '#C2A47A', strokeColor: '#7E5E38', score: 15 },
+  { name: '大礫',   sieve: '37.5mm',  upperSieveMM: 52,    radius: 108, color: '#B49468', strokeColor: '#6E5030', score: 21 },
+  { name: '巨礫',   sieve: '52mm',    upperSieveMM: 75,    radius: 130, color: '#A28458', strokeColor: '#5E4228', score: 28 },
+  { name: '転石',   sieve: '75mm+',   upperSieveMM: 100,   radius: 154, color: '#907448', strokeColor: '#4E3420', score: 36 },
 ];
 
 const SIEVE_SIZES = [4.75, 9.5, 19, 26.5, 37.5, 52, 75];
 
 // ================================================================
-// Game Dimensions
+// Game Dimensions — 1:1 container (480 x 480 inner)
+// Canvas 520 x 560: 20px walls, 60px drop zone at top
 // ================================================================
 
-const GAME_W = 450;
-const GAME_H = 700;
-const WALL_T = 25;
+const GAME_W = 520;
+const GAME_H = 560;
+const WALL_T = 20;
 const CL = WALL_T;
-const CR = GAME_W - WALL_T;
-const CB = GAME_H - WALL_T;
-const DROP_Y = 55;
-const DANGER_Y = 95;
+const CR = GAME_W - WALL_T;         // 500
+const CB = GAME_H - WALL_T;         // 540
+const CONTAINER_W = CR - CL;         // 480
+const CONTAINER_H = CB - WALL_T;     // 520... effectively ~480 of playable
+const DROP_Y = 45;
+const DANGER_Y = 75;
 
 // ================================================================
 // Material Properties
 // ================================================================
+// Silica sand (珪砂): E=70GPa, ν=0.17, ρ=2650kg/m³
+// NBR rubber (wall):  E=10MPa, ν=0.49
 //
-// Silica sand (珪砂, e.g. Toyoura sand):
-//   E = 70 GPa,  ν = 0.17,  ρ = 2650 kg/m³
-//   Internal friction angle φ ≈ 30-40° → μ ≈ tan(24°) ≈ 0.45
-//   Restitution e ≈ 0.50
+// E* derivation:
+//   PP (sand-sand): 1/E* = 2(1-0.17²)/70e9 → E* ≈ 36.0 GPa
+//   PW (sand-NBR):  1/E* = (1-0.17²)/70e9 + (1-0.49²)/10e6 → E* ≈ 13.2 MPa
+//   Ratio E*_PP/E*_PW ≈ 2740
 //
-// NBR rubber (wall liner):
-//   E = 10 MPa,  ν = 0.49 (nearly incompressible)
-//   μ ≈ 0.70 (rubber-sand friction)
-//   Restitution e ≈ 0.55
-//
-// Effective contact modulus E* (Hertz theory):
-//   1/E* = (1-ν₁²)/E₁ + (1-ν₂²)/E₂
-//
-//   Particle-Particle (sand-sand):
-//     1/E* = 2×(1-0.17²)/70e9 = 0.02775/GPa → E* = 36.0 GPa
-//
-//   Particle-Wall (sand-NBR):
-//     1/E* = (1-0.17²)/70e9 + (1-0.49²)/10e6
-//          ≈ 1.39e-11 + 7.60e-8 ≈ 7.60e-8 → E* = 13.2 MPa
-//
-//   Real ratio E*_PP/E*_PW ≈ 2740 (sand-sand >> sand-rubber)
-//
-// Effective radius R*:
-//   Particle-Particle: R* = (R₁·R₂)/(R₁+R₂)
-//   Particle-Wall:     R* = R_particle  (flat wall → R_wall = ∞)
-//
-// ================================================================
+// Pixel-space values scaled for gameplay while preserving ratio
 
 const GRAVITY = 700;
 
-// Pixel-space effective modulus for Hertz model
-// F_n = (4/3) · E*_px · √R* · δ^(3/2)
-const ESTAR_PP = 2000;
-const ESTAR_PW = 200;
+// Hertz: F_n = (4/3)·E*·√R*·δ^(3/2)
+const ESTAR_PP = 10000;
+const ESTAR_PW = 1200;
 
-// Pixel-space stiffness for Hooke model
-// F_n = k_n · δ
-const KN_PP = 25000;
-const KN_PW = 2500;
+// Hooke: F_n = k_n · δ
+const KN_PP = 100000;
+const KN_PW = 15000;
 
-// Friction coefficients
-const MU_PP = 0.45;
-const MU_PW = 0.70;
+const MU_PP = 0.45;       // Sand internal friction (φ≈24°)
+const MU_PW = 0.70;       // Sand-rubber friction
+const REST_PP = 0.50;     // Sand-sand restitution
+const REST_PW = 0.55;     // Sand-rubber restitution
 
-// Coefficients of restitution
-const RESTITUTION_PP = 0.50;
-const RESTITUTION_PW = 0.55;
+// Rolling friction coefficient (CDT model): μ_r << μ
+const MU_ROLL_PP = 0.03;
+const MU_ROLL_PW = 0.05;
 
-// Damping ratio β from restitution (Tsuji et al. 1992):
-//   β = -ln(e) / √(π² + ln²(e))
+// β = −ln(e) / √(π²+ln²(e))  (Tsuji damping)
 function beta(e: number): number {
   if (e <= 0) return 1;
   if (e >= 1) return 0;
-  const lnE = Math.log(e);
-  return -lnE / Math.sqrt(Math.PI * Math.PI + lnE * lnE);
+  const ln = Math.log(e);
+  return -ln / Math.sqrt(Math.PI * Math.PI + ln * ln);
 }
 
-const BETA_PP = beta(RESTITUTION_PP);
-const BETA_PW = beta(RESTITUTION_PW);
+const BETA_PP = beta(REST_PP);
+const BETA_PW = beta(REST_PW);
 
-// Tangential stiffness ratio (Mindlin-Deresiewicz):
-//   k_t / k_n = 4·(1-ν) / (2-ν)
-//   For ν=0.17: k_t/k_n = 4·0.83/1.83 ≈ 1.81
-const KT_RATIO = 4 * (1 - 0.17) / (2 - 0.17);
-
-const SUB_STEPS = 8;
-const AIR_DRAG = 0.9992;
+const SUB_STEPS = 10;
+const MAX_DELTA_RATIO = 0.08;     // max overlap = 8% of min radius
+const MAX_VEL = 3000;
+const MAX_OMEGA = 80;
+const VEL_DAMP = 0.9995;          // per substep air drag
+const ANG_DAMP = 0.998;           // per substep angular drag
 
 // ================================================================
 // Types
@@ -129,13 +113,14 @@ interface Particle {
   vy: number;
   radius: number;
   mass: number;
+  inertia: number;                // I = 0.5·m·R² (2D disk)
   level: number;
   angle: number;
+  omega: number;                  // angular velocity (rad/s)
+  active: boolean;                // true once center has been below DANGER_Y
 }
 
-interface Contact {
-  idA: number;
-  idB: number;
+interface ContactVis {
   x: number;
   y: number;
   force: number;
@@ -159,12 +144,12 @@ interface ScorePopup {
 type ContactModel = 'hooke' | 'hertz';
 
 // ================================================================
-// Game State
+// State
 // ================================================================
 
 let particles: Particle[] = [];
 let nextId = 0;
-let activeContacts: Contact[] = [];
+let contactVis: ContactVis[] = [];
 let effects: Effect[] = [];
 let scorePopups: ScorePopup[] = [];
 let mergeQueue: [number, number][] = [];
@@ -176,12 +161,12 @@ let nextLevel = 0;
 let dropX = GAME_W / 2;
 let canDrop = true;
 let gameOver = false;
-let dangerTimer = 0;
 let mergeCount = 0;
 let contactModel: ContactModel = 'hertz';
 let showForceChains = false;
 let comboCount = 0;
 let comboTimer = 0;
+let pendingGameOver = false;
 
 // ================================================================
 // DOM
@@ -206,49 +191,49 @@ const btnHertz = document.getElementById('btn-hertz') as HTMLButtonElement;
 const chkForces = document.getElementById('chk-forces') as HTMLInputElement;
 
 // ================================================================
-// DEM Physics Engine
+// DEM Physics
 // ================================================================
 //
-// Normal contact force (two models):
+// Normal force:
+//   Hooke:  F_ne = k_n · δ
+//   Hertz:  F_ne = (4/3)·E*·√R* · δ^(3/2)
+//   Damping: F_nd = −η_n · v_n   where η_n = 2β·√(m*·k_eff)
+//     Hooke k_eff = k_n
+//     Hertz k_eff = dF/dδ = 2·E*·√(R*·δ)
+//   F_n = max(0, F_ne + F_nd)
 //
-//   Hooke (linear spring-dashpot):
-//     F_n = k_n · δ                                    (elastic)
-//         - c_n · v_n                                   (damping)
-//     where c_n = 2·β·√(m*·k_n)                        (Tsuji damping)
+// Tangential sliding velocity at contact (2D):
+//   v_slide = (v_B − v_A)·t̂ − (ω_A·R_A + ω_B·R_B)
+//   where t̂ = (−ny, nx)
 //
-//   Hertz (non-linear, Johnson 1985):
-//     F_n = (4/3)·E*·√R* · δ^(3/2)                     (elastic)
-//         - c_n(δ) · v_n                                 (damping)
-//     where c_n = 2·β·√(m*·k_n_eff)                    (Tsuji damping)
-//           k_n_eff = dF/dδ = 2·E*·√(R*·δ)             (incremental stiffness)
+// Tangential force (Coulomb):
+//   |F_t| = min(μ·F_n, damp_t · |v_slide|)
+//   F_t opposes v_slide
 //
-//   In both cases: F_n = max(0, F_elastic + F_damp)
-//     (no tensile force)
+// Torque from tangential force:
+//   τ_A = sign(v_slide) · |F_t| · R_A
+//   τ_B = sign(v_slide) · |F_t| · R_B
 //
-// Tangential contact force:
-//   Simplified Coulomb friction (no tangential spring tracking):
-//     |F_t| = min(μ · F_n, m* · |v_t| / dt)
+// Rolling friction (CDT):
+//   τ_roll = −μ_r · R* · F_n · sign(ω_rel)
 //
-//   Full Mindlin-Deresiewicz would track δ_t incrementally:
-//     k_t = 8·G*·√(R*·δ)  for Hertz-Mindlin
-//     k_t = KT_RATIO · k_n for simplified
-//
-//   Sign convention:
-//     v_n > 0 : separating
-//     v_n < 0 : approaching
-//     F_damp = -c_n · v_n  (opposes relative velocity)
-//
+// Moment of inertia: I = 0.5·m·R²
 // ================================================================
 
 function createParticle(x: number, y: number, level: number): Particle {
   const r = LEVELS[level].radius;
+  const m = r * r * 0.008;
   return {
     id: nextId++,
-    x, y, vx: 0, vy: 0,
+    x, y,
+    vx: 0, vy: 0,
     radius: r,
-    mass: r * r * 0.012,
+    mass: m,
+    inertia: 0.5 * m * r * r,
     level,
     angle: 0,
+    omega: 0,
+    active: false,
   };
 }
 
@@ -256,36 +241,47 @@ function pairKey(a: number, b: number): string {
   return a < b ? `${a}_${b}` : `${b}_${a}`;
 }
 
+function clamp(v: number, lo: number, hi: number): number {
+  return v < lo ? lo : v > hi ? hi : v;
+}
+
+function hertzNormalForce(delta: number, rEff: number, eStar: number): number {
+  return (4 / 3) * eStar * Math.sqrt(Math.max(rEff, 0.1)) * Math.pow(Math.max(delta, 0), 1.5);
+}
+
+function hookeNormalForce(delta: number, kn: number): number {
+  return kn * delta;
+}
+
 function computeNormalForce(
-  delta: number,
-  rEff: number,
-  mEff: number,
-  vn: number,
-  eStar: number,
-  kn: number,
-  b: number,
+  delta: number, rEff: number, mEff: number, vn: number,
+  eStar: number, kn: number, b: number,
 ): number {
   if (delta <= 0) return 0;
 
-  let fn_elastic: number;
-  let kn_eff: number;
+  let fElastic: number;
+  let kEff: number;
 
   if (contactModel === 'hertz') {
-    fn_elastic = (4 / 3) * eStar * Math.sqrt(rEff) * Math.pow(delta, 1.5);
-    kn_eff = 2 * eStar * Math.sqrt(rEff * delta);
+    fElastic = hertzNormalForce(delta, rEff, eStar);
+    kEff = 2 * eStar * Math.sqrt(Math.max(rEff * delta, 0.01));
   } else {
-    fn_elastic = kn * delta;
-    kn_eff = kn;
+    fElastic = hookeNormalForce(delta, kn);
+    kEff = kn;
   }
 
-  const cn = 2 * b * Math.sqrt(mEff * kn_eff);
-  return Math.max(0, fn_elastic - cn * vn);
+  const eta = 2 * b * Math.sqrt(Math.max(mEff * kEff, 0.001));
+  // vn > 0 = separating, damping reduces force
+  // vn < 0 = approaching, damping increases force
+  return Math.max(0, fElastic - eta * vn);
 }
 
 function physicsStep(dt: number) {
-  const newContacts: Contact[] = [];
+  const newContactVis: ContactVis[] = [];
   const newPairs = new Set<string>();
+  pendingGameOver = false;
 
+  // --- Gravity ---
   for (const p of particles) {
     p.vy += GRAVITY * dt;
   }
@@ -300,15 +296,20 @@ function physicsStep(dt: number) {
       const dy = b.y - a.y;
       const distSq = dx * dx + dy * dy;
       const minDist = a.radius + b.radius;
-
       if (distSq >= minDist * minDist) continue;
 
       const dist = Math.sqrt(Math.max(distSq, 1e-8));
-      const delta = minDist - dist;
+      let delta = minDist - dist;
       if (delta <= 0) continue;
+
+      // Overlap cap (anti-divergence)
+      const maxDelta = MAX_DELTA_RATIO * Math.min(a.radius, b.radius);
+      delta = Math.min(delta, maxDelta);
 
       const nx = dx / dist;
       const ny = dy / dist;
+      const tx = -ny;
+      const ty = nx;
 
       // Relative velocity of B w.r.t. A
       const dvx = b.vx - a.vx;
@@ -317,116 +318,198 @@ function physicsStep(dt: number) {
       // Normal relative velocity (positive = separating)
       const vn = dvx * nx + dvy * ny;
 
-      // Tangential relative velocity
-      const vtx = dvx - vn * nx;
-      const vty = dvy - vn * ny;
-      const vtMag = Math.sqrt(vtx * vtx + vty * vty);
+      // Tangential sliding velocity at contact point INCLUDING rotation
+      // v_slide = (v_B − v_A)·t̂ − (ω_A·R_A + ω_B·R_B)
+      const vSlide = (dvx * tx + dvy * ty) - a.omega * a.radius - b.omega * b.radius;
 
-      // Effective mass: m* = (m₁·m₂)/(m₁+m₂)
+      // Effective quantities
       const mEff = (a.mass * b.mass) / (a.mass + b.mass);
-
-      // Effective radius: R* = (R₁·R₂)/(R₁+R₂)
       const rEff = (a.radius * b.radius) / (a.radius + b.radius);
 
-      // Normal force (Hooke or Hertz with Tsuji damping)
+      // Normal force
       const fn = computeNormalForce(delta, rEff, mEff, vn, ESTAR_PP, KN_PP, BETA_PP);
 
-      // Tangential force (Coulomb friction)
-      let ft = 0;
-      if (vtMag > 0.001) {
-        ft = Math.min(MU_PP * fn, mEff * vtMag / dt);
-      }
+      // Tangential force (Coulomb with damping)
+      const ftDamp = 2 * BETA_PP * Math.sqrt(Math.max(mEff * ESTAR_PP, 0.001)) * 0.5;
+      const ftMag = Math.min(MU_PP * fn, ftDamp * Math.abs(vSlide));
+      const ftSign = vSlide > 0.001 ? -1 : vSlide < -0.001 ? 1 : 0;
 
-      // Force on B: F_n·n - F_t·t_hat (friction opposes sliding)
-      const fx = fn * nx - ft * (vtMag > 0.001 ? vtx / vtMag : 0);
-      const fy = fn * ny - ft * (vtMag > 0.001 ? vty / vtMag : 0);
+      // Total force on B in n-direction and t-direction
+      const fx = fn * nx + ftSign * ftMag * tx;
+      const fy = fn * ny + ftSign * ftMag * ty;
 
-      // Apply: a = F/m (Newton's 2nd law)
+      // Translational acceleration
       b.vx += (fx / b.mass) * dt;
       b.vy += (fy / b.mass) * dt;
       a.vx -= (fx / a.mass) * dt;
       a.vy -= (fy / a.mass) * dt;
 
-      // Position correction (prevent excessive overlap)
+      // Torques from tangential friction
+      // τ = sign(v_slide) · |F_t| · R  (opposes sliding at contact)
+      const torqueSign = vSlide > 0.001 ? 1 : vSlide < -0.001 ? -1 : 0;
+      const torqueMag = ftMag;
+
+      a.omega += (torqueSign * torqueMag * a.radius / a.inertia) * dt;
+      b.omega += (torqueSign * torqueMag * b.radius / b.inertia) * dt;
+
+      // Rolling friction (CDT): τ_roll = −μ_r · R* · F_n · sign(ω_rel)
+      const omegaRel = b.omega - a.omega;
+      if (Math.abs(omegaRel) > 0.01) {
+        const tauRoll = MU_ROLL_PP * rEff * fn;
+        const rollSign = omegaRel > 0 ? 1 : -1;
+        const rollImpulse = Math.min(tauRoll * dt, Math.abs(omegaRel) * 0.5 * (a.inertia * b.inertia) / (a.inertia + b.inertia));
+        a.omega += rollSign * rollImpulse / a.inertia;
+        b.omega -= rollSign * rollImpulse / b.inertia;
+      }
+
+      // Position correction (20%, conservative)
       const totalM = a.mass + b.mass;
-      const corr = delta * 0.4;
+      const corr = delta * 0.2;
       a.x -= nx * corr * (b.mass / totalM);
       a.y -= ny * corr * (b.mass / totalM);
       b.x += nx * corr * (a.mass / totalM);
       b.y += ny * corr * (a.mass / totalM);
 
-      // Store contact for force chain visualization
+      // Visualization
       const fMag = Math.sqrt(fx * fx + fy * fy);
-      newContacts.push({
-        idA: a.id, idB: b.id,
+      newContactVis.push({
         x: (a.x * b.radius + b.x * a.radius) / (a.radius + b.radius),
         y: (a.y * b.radius + b.y * a.radius) / (a.radius + b.radius),
         force: fMag,
       });
 
-      // Merge detection: same-level particles on first contact
+      // Merge detection
       const key = pairKey(a.id, b.id);
       newPairs.add(key);
       if (!contactedPairs.has(key) && a.level === b.level) {
         mergeQueue.push([a.id, b.id]);
       }
+
+      // Game over: falling particle touches another before crossing DL
+      if (!pendingGameOver) {
+        const aAbove = a.y < DANGER_Y;
+        const bAbove = b.y < DANGER_Y;
+        if (!a.active && aAbove) pendingGameOver = true;
+        if (!b.active && bAbove) pendingGameOver = true;
+      }
     }
   }
 
-  // --- Particle-Wall contacts (NBR rubber) ---
-  // Wall: R* = R_particle (flat surface), wall mass = ∞ → m* = m_particle
+  // --- Wall contacts (NBR rubber) ---
   for (const p of particles) {
-    // Bottom wall: n = (0, -1), v_n = -vy
+    // Bottom wall: outward normal n=(0,-1), v_n = −vy
     const oBot = p.y + p.radius - CB;
     if (oBot > 0) {
+      const d = Math.min(oBot, MAX_DELTA_RATIO * p.radius);
       const vn = -p.vy;
-      const fn = computeNormalForce(oBot, p.radius, p.mass, vn, ESTAR_PW, KN_PW, BETA_PW);
+      const fn = computeNormalForce(d, p.radius, p.mass, vn, ESTAR_PW, KN_PW, BETA_PW);
       p.vy -= (fn / p.mass) * dt;
-      if (Math.abs(p.vx) > 0.01) {
-        const ft = Math.min(MU_PW * fn, p.mass * Math.abs(p.vx) / dt);
-        p.vx -= Math.sign(p.vx) * (ft / p.mass) * dt;
+
+      // Wall friction with rotation: v_slide = vx + ω·R
+      const vSlide = p.vx + p.omega * p.radius;
+      if (Math.abs(vSlide) > 0.01) {
+        const ftMax = MU_PW * fn;
+        const ft = Math.min(ftMax, Math.abs(vSlide) * p.mass / dt * 0.5);
+        p.vx -= Math.sign(vSlide) * (ft / p.mass) * dt;
+        // Torque: τ = −sign(v_slide)·|F_t|·R
+        p.omega -= Math.sign(vSlide) * (ft * p.radius / p.inertia) * dt;
       }
+
+      // Wall rolling friction
+      if (Math.abs(p.omega) > 0.01) {
+        const tauR = MU_ROLL_PW * p.radius * fn;
+        const imp = Math.min(tauR * dt, Math.abs(p.omega) * p.inertia * 0.5);
+        p.omega -= Math.sign(p.omega) * imp / p.inertia;
+      }
+
       p.y = Math.min(p.y, CB - p.radius);
     }
 
-    // Left wall: n = (1, 0), v_n = vx
-    const oLeft = CL - (p.x - p.radius);
-    if (oLeft > 0) {
+    // Left wall: n=(1,0), v_n = vx
+    const oL = CL - (p.x - p.radius);
+    if (oL > 0) {
+      const d = Math.min(oL, MAX_DELTA_RATIO * p.radius);
       const vn = p.vx;
-      const fn = computeNormalForce(oLeft, p.radius, p.mass, vn, ESTAR_PW, KN_PW, BETA_PW);
+      const fn = computeNormalForce(d, p.radius, p.mass, vn, ESTAR_PW, KN_PW, BETA_PW);
       p.vx += (fn / p.mass) * dt;
+      const vSlide = p.vy + p.omega * p.radius;
+      if (Math.abs(vSlide) > 0.01) {
+        const ft = Math.min(MU_PW * fn, Math.abs(vSlide) * p.mass / dt * 0.5);
+        p.vy -= Math.sign(vSlide) * (ft / p.mass) * dt;
+        p.omega -= Math.sign(vSlide) * (ft * p.radius / p.inertia) * dt;
+      }
       p.x = Math.max(p.x, CL + p.radius);
     }
 
-    // Right wall: n = (-1, 0), v_n = -vx
-    const oRight = (p.x + p.radius) - CR;
-    if (oRight > 0) {
+    // Right wall: n=(−1,0), v_n = −vx
+    const oR = (p.x + p.radius) - CR;
+    if (oR > 0) {
+      const d = Math.min(oR, MAX_DELTA_RATIO * p.radius);
       const vn = -p.vx;
-      const fn = computeNormalForce(oRight, p.radius, p.mass, vn, ESTAR_PW, KN_PW, BETA_PW);
+      const fn = computeNormalForce(d, p.radius, p.mass, vn, ESTAR_PW, KN_PW, BETA_PW);
       p.vx -= (fn / p.mass) * dt;
+      const vSlide = -(p.vy - p.omega * p.radius);
+      if (Math.abs(vSlide) > 0.01) {
+        const ft = Math.min(MU_PW * fn, Math.abs(vSlide) * p.mass / dt * 0.5);
+        p.vy += Math.sign(vSlide) * (ft / p.mass) * dt;
+        p.omega += Math.sign(vSlide) * (ft * p.radius / p.inertia) * dt;
+      }
       p.x = Math.min(p.x, CR - p.radius);
     }
   }
 
-  // --- Integration (symplectic Euler) ---
+  // --- Integration + damping + clamping ---
   for (const p of particles) {
-    p.vx *= AIR_DRAG;
-    p.vy *= AIR_DRAG;
+    p.vx *= VEL_DAMP;
+    p.vy *= VEL_DAMP;
+    p.omega *= ANG_DAMP;
+
+    p.vx = clamp(p.vx, -MAX_VEL, MAX_VEL);
+    p.vy = clamp(p.vy, -MAX_VEL, MAX_VEL);
+    p.omega = clamp(p.omega, -MAX_OMEGA, MAX_OMEGA);
+
     p.x += p.vx * dt;
     p.y += p.vy * dt;
-    p.angle += (p.vx / Math.max(p.radius, 1)) * dt;
+    p.angle += p.omega * dt;
+
+    // Mark as active once center passes below DANGER_Y
+    if (!p.active && p.y > DANGER_Y) {
+      p.active = true;
+    }
   }
 
-  activeContacts = newContacts;
+  contactVis = newContactVis;
   contactedPairs = newPairs;
+}
+
+// ================================================================
+// Game Over Logic
+// ================================================================
+// Condition 1: settled particle (active=true) center rises above DL
+// Condition 2: falling particle touches another before crossing DL
+//   (detected in physicsStep, sets pendingGameOver)
+
+function checkGameOver() {
+  if (pendingGameOver) {
+    gameOver = true;
+    finalScoreEl.textContent = score.toString();
+    gameOverEl.style.display = 'flex';
+    return;
+  }
+
+  for (const p of particles) {
+    if (p.active && p.y < DANGER_Y) {
+      gameOver = true;
+      finalScoreEl.textContent = score.toString();
+      gameOverEl.style.display = 'flex';
+      return;
+    }
+  }
 }
 
 // ================================================================
 // Merge Logic
 // ================================================================
-// Same-level particles merge on first contact:
-//   level < max → next level (standard Suika mechanic)
-//   level == max → annihilation (both disappear, big bonus)
 
 function processMerges() {
   const consumed = new Set<number>();
@@ -447,28 +530,25 @@ function processMerges() {
     particles = particles.filter(p => p.id !== idA && p.id !== idB);
 
     if (newLevel >= LEVELS.length) {
-      // Max-level annihilation (転石 + 転石 → disappear)
       const pts = LEVELS[a.level].score * 5;
       score += pts;
       mergeCount++;
       comboCount++;
       comboTimer = 45;
       effects.push({ x: mx, y: my, r: 10, alpha: 1, color: '#FFFFFF' });
-      effects.push({ x: mx, y: my, r: 30, alpha: 0.7, color: '#F7DC6F' });
+      effects.push({ x: mx, y: my, r: 30, alpha: 0.7, color: '#F5E6CC' });
       scorePopups.push({ x: mx, y: my, text: `+${pts} MAX!`, timer: 90 });
       scoreEl.textContent = score.toString();
       mergeEl.textContent = `合体回数: ${mergeCount}`;
       continue;
     }
 
-    // Normal merge: conservation of momentum
     const tm = a.mass + b.mass;
-    const nvx = (a.vx * a.mass + b.vx * b.mass) / tm;
-    const nvy = (a.vy * a.mass + b.vy * b.mass) / tm;
-
     const np = createParticle(mx, my, newLevel);
-    np.vx = nvx;
-    np.vy = nvy - 40;
+    np.vx = (a.vx * a.mass + b.vx * b.mass) / tm;
+    np.vy = (a.vy * a.mass + b.vy * b.mass) / tm - 30;
+    np.omega = (a.omega * a.inertia + b.omega * b.inertia) / (a.inertia + b.inertia);
+    np.active = a.active || b.active;
     particles.push(np);
 
     effects.push({ x: mx, y: my, r: LEVELS[newLevel].radius * 0.3, alpha: 1, color: LEVELS[newLevel].color });
@@ -478,9 +558,7 @@ function processMerges() {
     const pts = Math.floor(LEVELS[newLevel].score * (1 + (comboCount - 1) * 0.5));
     score += pts;
     mergeCount++;
-
     scorePopups.push({ x: mx, y: my, text: `+${pts}`, timer: 60 });
-
     scoreEl.textContent = score.toString();
     mergeEl.textContent = `合体回数: ${mergeCount}`;
   }
@@ -516,40 +594,18 @@ function drop() {
   currentLevel = nextLevel;
   nextLevel = getRandomLevel();
   updateNextPreview();
-
-  setTimeout(() => { if (!gameOver) canDrop = true; }, 450);
-}
-
-function checkGameOver() {
-  let above = false;
-  for (const p of particles) {
-    const spd = Math.sqrt(p.vx * p.vx + p.vy * p.vy);
-    if (spd < 80 && p.y - p.radius < DANGER_Y) {
-      above = true;
-      break;
-    }
-  }
-
-  if (above) {
-    dangerTimer++;
-    if (dangerTimer > 90) {
-      gameOver = true;
-      finalScoreEl.textContent = score.toString();
-      gameOverEl.style.display = 'flex';
-    }
-  } else {
-    dangerTimer = Math.max(0, dangerTimer - 2);
-  }
+  setTimeout(() => { if (!gameOver) canDrop = true; }, 500);
 }
 
 function restart() {
   particles = [];
-  activeContacts = [];
+  contactVis = [];
   effects = [];
   scorePopups = [];
   mergeQueue = [];
   contactedPairs.clear();
   nextId = 0;
+  pendingGameOver = false;
 
   score = 0;
   currentLevel = getRandomLevel();
@@ -605,11 +661,11 @@ function drawParticle(ctx: CanvasRenderingContext2D, x: number, y: number, angle
 
   ctx.beginPath();
   ctx.arc(2, 3, r, 0, Math.PI * 2);
-  ctx.fillStyle = 'rgba(0,0,0,0.18)';
+  ctx.fillStyle = 'rgba(0,0,0,0.15)';
   ctx.fill();
 
   const grad = ctx.createRadialGradient(-r * 0.25, -r * 0.25, r * 0.05, 0, 0, r);
-  grad.addColorStop(0, lighten(info.color, 40));
+  grad.addColorStop(0, lighten(info.color, 35));
   grad.addColorStop(1, info.color);
   ctx.beginPath();
   ctx.arc(0, 0, r, 0, Math.PI * 2);
@@ -626,21 +682,23 @@ function drawParticle(ctx: CanvasRenderingContext2D, x: number, y: number, angle
     const ddy = (rng() - 0.5) * r * 1.4;
     if (ddx * ddx + ddy * ddy < (r * 0.7) ** 2) {
       ctx.beginPath();
-      ctx.arc(ddx, ddy, Math.max(1, r * 0.055), 0, Math.PI * 2);
-      ctx.fillStyle = hexToRGBA(info.strokeColor, 0.35);
+      ctx.arc(ddx, ddy, Math.max(1, r * 0.05), 0, Math.PI * 2);
+      ctx.fillStyle = hexToRGBA(info.strokeColor, 0.3);
       ctx.fill();
     }
   }
 
-  const fontSize = Math.max(7, Math.floor(r * 0.34));
+  const fontSize = Math.max(8, Math.floor(r * 0.3));
   ctx.font = `bold ${fontSize}px sans-serif`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.fillStyle = '#222';
+  ctx.fillStyle = '#3E2723';
   ctx.fillText(info.sieve, 0, 0);
 
   ctx.restore();
 }
+
+let dangerTimer = 0;
 
 function drawGame() {
   const ctx = gCtx;
@@ -652,7 +710,7 @@ function drawGame() {
   bgGrad.addColorStop(0, '#151530');
   bgGrad.addColorStop(1, '#0d0d20');
   ctx.fillStyle = bgGrad;
-  ctx.fillRect(CL, 0, CR - CL, GAME_H);
+  ctx.fillRect(CL, 0, CONTAINER_W, GAME_H);
 
   ctx.fillStyle = '#1e1e45';
   ctx.fillRect(0, 0, WALL_T, GAME_H);
@@ -681,14 +739,14 @@ function drawGame() {
   ctx.fillStyle = `rgba(255,60,60,${dAlpha * 0.7})`;
   ctx.font = '9px sans-serif';
   ctx.textAlign = 'right';
-  ctx.fillText('DANGER', CR - 4, DANGER_Y - 4);
+  ctx.fillText('DEAD LINE', CR - 4, DANGER_Y - 4);
 
-  if (showForceChains && activeContacts.length > 0) {
-    const maxF = Math.max(...activeContacts.map(c => c.force), 1);
-    for (const c of activeContacts) {
+  if (showForceChains && contactVis.length > 0) {
+    const maxF = Math.max(...contactVis.map(c => c.force), 1);
+    for (const c of contactVis) {
       const t = Math.min(c.force / maxF, 1);
       const w = 1 + t * 5;
-      ctx.strokeStyle = `rgba(${Math.floor(50 + 205 * t)},${Math.floor(200 * (1 - t))},${Math.floor(255 * (1 - t))},${0.3 + t * 0.5})`;
+      ctx.strokeStyle = `rgba(${Math.floor(80 + 175 * t)},${Math.floor(150 * (1 - t))},${Math.floor(200 * (1 - t))},${0.3 + t * 0.5})`;
       ctx.lineWidth = w;
       ctx.beginPath();
       ctx.arc(c.x, c.y, w * 2, 0, Math.PI * 2);
@@ -702,7 +760,6 @@ function drawGame() {
     ctx.strokeStyle = hexToRGBA(e.color, e.alpha);
     ctx.lineWidth = 3;
     ctx.stroke();
-
     ctx.beginPath();
     ctx.arc(e.x, e.y, e.r * 0.5, 0, Math.PI * 2);
     ctx.strokeStyle = `rgba(255,255,255,${e.alpha * 0.5})`;
@@ -733,7 +790,6 @@ function drawGame() {
   if (!gameOver && canDrop) {
     const r = LEVELS[currentLevel].radius;
     const cx = Math.max(CL + r + 2, Math.min(CR - r - 2, dropX));
-
     ctx.strokeStyle = 'rgba(255,255,255,0.12)';
     ctx.lineWidth = 1;
     ctx.setLineDash([4, 4]);
@@ -742,7 +798,6 @@ function drawGame() {
     ctx.lineTo(cx, CB);
     ctx.stroke();
     ctx.setLineDash([]);
-
     drawParticle(ctx, cx, DROP_Y, 0, currentLevel);
   }
 
@@ -858,7 +913,7 @@ function drawGradingChart() {
   points.push({ x: 0.8, y: 0 });
   points.sort((a, b) => a.x - b.x);
 
-  ctx.strokeStyle = '#e74c3c';
+  ctx.strokeStyle = '#8B6F47';
   ctx.lineWidth = 2.5;
   ctx.beginPath();
   for (let i = 0; i < points.length; i++) {
@@ -869,7 +924,7 @@ function drawGradingChart() {
   }
   ctx.stroke();
 
-  ctx.fillStyle = 'rgba(231,76,60,0.1)';
+  ctx.fillStyle = 'rgba(139,111,71,0.1)';
   ctx.beginPath();
   for (let i = 0; i < points.length; i++) {
     const px = toX(points[i].x);
@@ -887,7 +942,7 @@ function drawGradingChart() {
     const py = pad.top + pH - (points[i].y / 100) * pH;
     ctx.beginPath();
     ctx.arc(px, py, 2.5, 0, Math.PI * 2);
-    ctx.fillStyle = '#c0392b';
+    ctx.fillStyle = '#6B5235';
     ctx.fill();
   }
 
