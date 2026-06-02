@@ -7,5 +7,5 @@
     </radialGradient>
   </defs>
   <circle cx="256" cy="256" r="194" fill="url(#g)" stroke="#7E5E38" stroke-width="10"/>
-  <text x="256" y="270" text-anchor="middle" dominant-baseline="central" font-family="sans-serif" font-weight="bold" font-size="112" fill="#3E2723">粒</text>
+  <text x="256" y="270" text-anchor="middle" dominant-baseline="central" font-family="sans-serif" font-weight="bold" font-size="160" fill="#3E2723">粒</text>
 </svg>
