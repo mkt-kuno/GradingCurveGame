@@ -1,0 +1,12 @@
+{
+  "name": "粒度分布ゲーム ～土質工学メロンゲーム～",
+  "short_name": "粒度分布",
+  "description": "土質工学DEM物理エンジンを使った粒度分布ゲーム",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#0a0a1a",
+  "theme_color": "#0a0a1a",
+  "icons": [
+    { "src": "icons/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}

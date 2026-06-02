@@ -944,7 +944,7 @@ function drawGradingChart() {
     ctx.font = '14px sans-serif';
     ctx.textAlign = 'center';
     ctx.fillText('粒子を落としてください', W / 2, H / 2);
-    paramsEl.textContent = '\n\n';
+    paramsEl.textContent = 'D\u2081\u2080=--mm  D\u2083\u2080=--mm  D\u2086\u2080=--mm  Cu=--  Cc=--';
     return;
   }
 
@@ -1093,6 +1093,9 @@ function setupInput() {
 
   restartBtn.addEventListener('click', restart);
 
+  const scoreRestartBtn = document.getElementById('score-restart-btn')!;
+  scoreRestartBtn.addEventListener('click', restart);
+
   btnHooke.addEventListener('click', () => {
     contactModel = 'hooke';
     btnHooke.classList.add('active');
@@ -1147,3 +1150,7 @@ nextLevel = getRandomLevel();
 updateNextPreview();
 setupInput();
 update();
+
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('sw.js').catch(() => {});
+}

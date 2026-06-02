@@ -3,7 +3,12 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>粒度分布を学ぼう ～土質工学的スイ◯ゲーム～</title>
+<meta name="theme-color" content="#0a0a1a">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>粒度分布ゲーム ～土質工学メロンゲーム～</title>
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icons/icon.svg">
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 body{background:#0a0a1a;color:#eee;font-family:'Segoe UI','Helvetica Neue',sans-serif;display:flex;justify-content:center;align-items:flex-start;min-height:100vh;padding:8px;overflow-y:auto;font-size:16px}
@@ -31,7 +36,7 @@ body{background:#0a0a1a;color:#eee;font-family:'Segoe UI','Helvetica Neue',sans-
 #chk-wrap{display:flex;align-items:center;font-size:18px;color:#aaa;cursor:pointer}
 #chk-forces{accent-color:#e94560;margin-right:8px;transform:scale(1.2)}
 #chart-canvas{display:block;border-radius:8px;width:100%}
-#grading-params{font-size:13px;color:#aaa;margin-top:8px;line-height:1.7;white-space:pre-line}
+#grading-params{font-size:15px;color:#aaa;margin-top:8px;line-height:1.7;white-space:pre-line}
 #soil-class{margin-top:10px}
 .sc-title{font-size:17px;color:#e94560;letter-spacing:1px;margin-bottom:8px;font-weight:bold}
 .sc-row{display:flex;border-radius:8px;overflow:hidden;font-size:16px;text-align:center}
@@ -76,6 +81,7 @@ body{background:#0a0a1a;color:#eee;font-family:'Segoe UI','Helvetica Neue',sans-
       <h3>スコア</h3>
       <div id="score-value">0</div>
       <div id="merge-count">合体回数: 0</div>
+      <button id="score-restart-btn" style="margin-top:12px;width:100%;padding:10px 0;font-size:16px;font-weight:bold;background:#e94560;color:#fff;border:none;border-radius:6px;cursor:pointer;transition:background .2s">リセット</button>
     </div>
     <div class="panel">
       <h3>次の粒子</h3>
