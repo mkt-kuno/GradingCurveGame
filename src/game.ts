@@ -244,19 +244,27 @@ highScoreEl.textContent = `今日のハイスコア: ${highScore}`;
 //   F_n = max(0, F_ne + F_nd)
 //
 // Tangential sliding velocity at contact (2D):
-//   v_slide = (v_B − v_A)·t̂ − (ω_A·R_A + ω_B·R_B)
-//   where t̂ = (−ny, nx)
+//   PP: v_slide = (v_B − v_A)·t̂ − (ω_A·R_A + ω_B·R_B)
+//       where t̂ = (−ny, nx), r_A = R_A·n̂, r_B = −R_B·n̂
+//   Wall (bottom, r_cp=(0,R)): v_slide = vx − ω·R
+//   Wall (left,   r_cp=(−R,0)): v_slide = vy − ω·R
+//   Wall (right,  r_cp=(R,0)):  v_slide = vy + ω·R
 //
-// Tangential force (Coulomb):
-//   |F_t| = min(μ·F_n, damp_t · |v_slide|)
+// Tangential force (Coulomb with Tsuji viscous regularization):
+//   η_t = 2β·√(m*·k_t_eff)
+//     Hooke: k_t_eff = k_n
+//     Hertz: k_t_eff = 2·E*·√(R*·δ)
+//   |F_t| = min(μ·F_n, η_t · |v_slide|)
 //   F_t opposes v_slide
 //
 // Torque from tangential force:
-//   τ_A = sign(v_slide) · |F_t| · R_A
-//   τ_B = sign(v_slide) · |F_t| · R_B
+//   τ = r_cp × F_t  (2D scalar: rx·Fy − ry·Fx)
+//   PP: τ_A = sign(v_slide)·|F_t|·R_A, τ_B = sign(v_slide)·|F_t|·R_B
+//   Bottom wall: Δω = +sign(v_slide)·F_t·R / I
+//   Left wall:   Δω = +sign(v_slide)·F_t·R / I
+//   Right wall:  Δω = −sign(v_slide)·F_t·R / I
 //
-// Rolling friction (CDT):
-//   τ_roll = −μ_r · R* · F_n · sign(ω_rel)
+// Rolling friction (CDT): τ_roll = −μ_r · R* · F_n · sign(ω_rel)
 //
 // Moment of inertia: I = 0.5·m·R²
 // ================================================================
@@ -372,8 +380,13 @@ function physicsStep(dt: number) {
       // Normal force
       const fn = computeNormalForce(delta, rEff, mEff, vn, ESTAR_PP, KN_PP, BETA_PP);
 
-      // Tangential force (Coulomb with damping)
-      const ftDamp = 2 * BETA_PP * Math.sqrt(Math.max(mEff * ESTAR_PP, 0.001)) * 0.5;
+      // Tangential force (Coulomb with Tsuji damping)
+      // η_t = 2β√(m*·k_t_eff)
+      // Hooke: k_t_eff = k_n,  Hertz: k_t_eff = 2E*√(R*δ)
+      const kTEffPP = contactModel === 'hertz'
+        ? 2 * ESTAR_PP * Math.sqrt(Math.max(rEff * delta, 0.01))
+        : KN_PP;
+      const ftDamp = 2 * BETA_PP * Math.sqrt(Math.max(mEff * kTEffPP, 0.001));
       const ftMag = Math.min(MU_PP * fn, ftDamp * Math.abs(vSlide));
       const ftSign = vSlide > 0.001 ? -1 : vSlide < -0.001 ? 1 : 0;
 
@@ -448,13 +461,17 @@ function physicsStep(dt: number) {
       const fn = computeNormalForce(d, p.radius, p.mass, vn, ESTAR_PW, KN_PW, BETA_PW);
       p.vy -= (fn / p.mass) * dt;
 
-      // Wall friction with rotation: v_slide = vx + ω·R
-      const vSlide = p.vx + p.omega * p.radius;
-      if (Math.abs(vSlide) > 0.01) {
-        const ftMax = MU_PW * fn;
-        const ft = Math.min(ftMax, Math.abs(vSlide) * p.mass / dt * 2.0);
-        p.vx -= Math.sign(vSlide) * (ft / p.mass) * dt;
-        p.omega -= Math.sign(vSlide) * (ft * p.radius / p.inertia) * dt;
+      // Wall friction: v_slide at contact = vx − ω·R
+      // r_cp = (0, R), v_cp = (vx−ωR, vy), tangent t=(1,0)
+      const vSlideBot = p.vx - p.omega * p.radius;
+      if (Math.abs(vSlideBot) > 0.01) {
+        const kTEffW = contactModel === 'hertz'
+          ? 2 * ESTAR_PW * Math.sqrt(Math.max(p.radius * d, 0.01))
+          : KN_PW;
+        const ftDampW = 2 * BETA_PW * Math.sqrt(Math.max(p.mass * kTEffW, 0.001));
+        const ft = Math.min(MU_PW * fn, ftDampW * Math.abs(vSlideBot));
+        p.vx -= Math.sign(vSlideBot) * (ft / p.mass) * dt;
+        p.omega += Math.sign(vSlideBot) * (ft * p.radius / p.inertia) * dt;
       }
 
       // Wall rolling friction
@@ -463,9 +480,6 @@ function physicsStep(dt: number) {
         const imp = Math.min(tauR * dt, Math.abs(p.omega) * p.inertia * 0.5);
         p.omega -= Math.sign(p.omega) * imp / p.inertia;
       }
-
-      // Direct wall grip: kill rotation near wall
-      p.omega *= 0.85;
 
       p.y = Math.min(p.y, CB - p.radius);
     }
@@ -477,13 +491,23 @@ function physicsStep(dt: number) {
       const vn = p.vx;
       const fn = computeNormalForce(d, p.radius, p.mass, vn, ESTAR_PW, KN_PW, BETA_PW);
       p.vx += (fn / p.mass) * dt;
-      const vSlide = p.vy + p.omega * p.radius;
-      if (Math.abs(vSlide) > 0.01) {
-        const ft = Math.min(MU_PW * fn, Math.abs(vSlide) * p.mass / dt * 2.0);
-        p.vy -= Math.sign(vSlide) * (ft / p.mass) * dt;
-        p.omega -= Math.sign(vSlide) * (ft * p.radius / p.inertia) * dt;
+      // Wall friction: v_slide at contact = vy − ω·R
+      // r_cp = (−R, 0), v_cp = (vx, vy−ωR), tangent t=(0,1)
+      const vSlideL = p.vy - p.omega * p.radius;
+      if (Math.abs(vSlideL) > 0.01) {
+        const kTEffW = contactModel === 'hertz'
+          ? 2 * ESTAR_PW * Math.sqrt(Math.max(p.radius * d, 0.01))
+          : KN_PW;
+        const ftDampW = 2 * BETA_PW * Math.sqrt(Math.max(p.mass * kTEffW, 0.001));
+        const ft = Math.min(MU_PW * fn, ftDampW * Math.abs(vSlideL));
+        p.vy -= Math.sign(vSlideL) * (ft / p.mass) * dt;
+        p.omega += Math.sign(vSlideL) * (ft * p.radius / p.inertia) * dt;
       }
-      p.omega *= 0.85;
+      if (Math.abs(p.omega) > 0.01) {
+        const tauR = MU_ROLL_PW * p.radius * fn;
+        const imp = Math.min(tauR * dt, Math.abs(p.omega) * p.inertia * 0.5);
+        p.omega -= Math.sign(p.omega) * imp / p.inertia;
+      }
       p.x = Math.max(p.x, CL + p.radius);
     }
 
@@ -494,13 +518,23 @@ function physicsStep(dt: number) {
       const vn = -p.vx;
       const fn = computeNormalForce(d, p.radius, p.mass, vn, ESTAR_PW, KN_PW, BETA_PW);
       p.vx -= (fn / p.mass) * dt;
-      const vSlide = -(p.vy - p.omega * p.radius);
-      if (Math.abs(vSlide) > 0.01) {
-        const ft = Math.min(MU_PW * fn, Math.abs(vSlide) * p.mass / dt * 2.0);
-        p.vy += Math.sign(vSlide) * (ft / p.mass) * dt;
-        p.omega += Math.sign(vSlide) * (ft * p.radius / p.inertia) * dt;
+      // Wall friction: v_slide at contact = vy + ω·R
+      // r_cp = (R, 0), v_cp = (vx, vy+ωR), tangent t=(0,1)
+      const vSlideR = p.vy + p.omega * p.radius;
+      if (Math.abs(vSlideR) > 0.01) {
+        const kTEffW = contactModel === 'hertz'
+          ? 2 * ESTAR_PW * Math.sqrt(Math.max(p.radius * d, 0.01))
+          : KN_PW;
+        const ftDampW = 2 * BETA_PW * Math.sqrt(Math.max(p.mass * kTEffW, 0.001));
+        const ft = Math.min(MU_PW * fn, ftDampW * Math.abs(vSlideR));
+        p.vy -= Math.sign(vSlideR) * (ft / p.mass) * dt;
+        p.omega -= Math.sign(vSlideR) * (ft * p.radius / p.inertia) * dt;
       }
-      p.omega *= 0.85;
+      if (Math.abs(p.omega) > 0.01) {
+        const tauR = MU_ROLL_PW * p.radius * fn;
+        const imp = Math.min(tauR * dt, Math.abs(p.omega) * p.inertia * 0.5);
+        p.omega -= Math.sign(p.omega) * imp / p.inertia;
+      }
       p.x = Math.min(p.x, CR - p.radius);
     }
   }
