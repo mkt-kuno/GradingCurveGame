@@ -23,34 +23,34 @@ interface ParticleLevel {
 }
 
 const LEVELS: ParticleLevel[] = [
-  { name: '細礫',   sieve: '2mm',     upperSieveMM: 4.75,  radius: 20, color: '#F8EED8', strokeColor: '#C4B49C', score: 1 },
-  { name: '中礫',   sieve: '4.75mm',  upperSieveMM: 9.5,   radius: 28, color: '#F5E6CC', strokeColor: '#B8A48A', score: 2 },
-  { name: '中礫',   sieve: '9.5mm',   upperSieveMM: 19,    radius: 40, color: '#EAD5B8', strokeColor: '#A89070', score: 4 },
-  { name: '粗礫',   sieve: '19mm',    upperSieveMM: 26.5,  radius: 54, color: '#DCC4A0', strokeColor: '#9A7C5A', score: 7 },
-  { name: '粗礫',   sieve: '26.5mm',  upperSieveMM: 37.5,  radius: 70, color: '#D0B48E', strokeColor: '#8C6C46', score: 11 },
-  { name: '粗礫',   sieve: '37.5mm',  upperSieveMM: 53,    radius: 88, color: '#C2A47A', strokeColor: '#7E5E38', score: 16 },
-  { name: '粗礫',   sieve: '53mm',    upperSieveMM: 75,    radius: 108, color: '#B49468', strokeColor: '#6E5030', score: 22 },
-  { name: '石分',   sieve: '75mm',    upperSieveMM: 100,   radius: 130, color: '#A28458', strokeColor: '#5E4228', score: 29 },
-  { name: '石分',   sieve: '100mm+',  upperSieveMM: 150,   radius: 154, color: '#907448', strokeColor: '#4E3420', score: 37 },
+  { name: '細礫',   sieve: '2mm',     upperSieveMM: 4.75,  radius: 30, color: '#F8EED8', strokeColor: '#C4B49C', score: 1 },
+  { name: '中礫',   sieve: '4.75mm',  upperSieveMM: 9.5,   radius: 42, color: '#F5E6CC', strokeColor: '#B8A48A', score: 2 },
+  { name: '中礫',   sieve: '9.5mm',   upperSieveMM: 19,    radius: 60, color: '#EAD5B8', strokeColor: '#A89070', score: 4 },
+  { name: '粗礫',   sieve: '19mm',    upperSieveMM: 26.5,  radius: 81, color: '#DCC4A0', strokeColor: '#9A7C5A', score: 7 },
+  { name: '粗礫',   sieve: '26.5mm',  upperSieveMM: 37.5,  radius: 105, color: '#D0B48E', strokeColor: '#8C6C46', score: 11 },
+  { name: '粗礫',   sieve: '37.5mm',  upperSieveMM: 53,    radius: 132, color: '#C2A47A', strokeColor: '#7E5E38', score: 16 },
+  { name: '粗礫',   sieve: '53mm',    upperSieveMM: 75,    radius: 162, color: '#B49468', strokeColor: '#6E5030', score: 22 },
+  { name: '石分',   sieve: '75mm',    upperSieveMM: 100,   radius: 195, color: '#A28458', strokeColor: '#5E4228', score: 29 },
+  { name: '石分',   sieve: '100mm+',  upperSieveMM: 150,   radius: 231, color: '#907448', strokeColor: '#4E3420', score: 37 },
 ];
 
 const SIEVE_SIZES = [2, 4.75, 9.5, 19, 26.5, 37.5, 53, 75];
 
 // ================================================================
-// Game Dimensions — 1:1 container (600 x 600 inner)
-// Canvas 650 x 700: 25px walls, 75px drop zone at top
+// Game Dimensions — 1:1 container (792 x 792 inner)
+// Canvas 858 x 924: 33px walls, 99px drop zone at top
 // ================================================================
 
-const GAME_W = 650;
-const GAME_H = 700;
-const WALL_T = 25;
+const GAME_W = 858;
+const GAME_H = 865;
+const WALL_T = 33;
 const CL = WALL_T;
-const CR = GAME_W - WALL_T;         // 625
-const CB = GAME_H - WALL_T;         // 675
-const CONTAINER_W = CR - CL;         // 600
-const CONTAINER_H = CB - WALL_T;     // 650... effectively ~600 of playable
-const DROP_Y = 55;
-const DANGER_Y = 90;
+const CR = GAME_W - WALL_T;         // 825
+const CB = GAME_H - WALL_T;         // 832
+const CONTAINER_W = CR - CL;         // 792
+const CONTAINER_H = CB - WALL_T;     // 719
+const DROP_Y = 72;
+const DANGER_Y = 116;
 
 // ================================================================
 // Material Properties
@@ -771,11 +771,25 @@ function drawGame() {
     const maxF = Math.max(...contactVis.map(c => c.force), 1);
     for (const c of contactVis) {
       const t = Math.min(c.force / maxF, 1);
-      const w = 1 + t * 5;
-      ctx.strokeStyle = `rgba(${Math.floor(80 + 175 * t)},${Math.floor(150 * (1 - t))},${Math.floor(200 * (1 - t))},${0.3 + t * 0.5})`;
+      const w = 2 + t * 10;
+      const r = w * 3;
+      const grad = ctx.createRadialGradient(c.x, c.y, 0, c.x, c.y, r);
+      const rC = Math.floor(255);
+      const gC = Math.floor(255 * (1 - t * 0.85));
+      const bC = Math.floor(50 * (1 - t));
+      const a1 = (0.7 + t * 0.3).toFixed(2);
+      const a2 = (0.3 + t * 0.3).toFixed(2);
+      grad.addColorStop(0, `rgba(${rC},${gC},${bC},${a1})`);
+      grad.addColorStop(0.5, `rgba(${rC},${Math.floor(gC * 0.6)},0,${a2})`);
+      grad.addColorStop(1, `rgba(${Math.floor(rC * 0.8)},0,0,0)`);
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc(c.x, c.y, r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = `rgba(255,255,200,${0.3 + t * 0.5})`;
       ctx.lineWidth = w;
       ctx.beginPath();
-      ctx.arc(c.x, c.y, w * 2, 0, Math.PI * 2);
+      ctx.arc(c.x, c.y, r * 0.4, 0, Math.PI * 2);
       ctx.stroke();
     }
   }
@@ -842,7 +856,7 @@ function drawGradingChart() {
   const ctx = cCtx;
   const W = chartCanvas.width;
   const H = chartCanvas.height;
-  const pad = { top: 24, right: 20, bottom: 48, left: 54 };
+  const pad = { top: 28, right: 24, bottom: 56, left: 62 };
   const pW = W - pad.left - pad.right;
   const pH = H - pad.top - pad.bottom;
 
@@ -865,7 +879,7 @@ function drawGradingChart() {
   ctx.stroke();
 
   ctx.fillStyle = '#444';
-  ctx.font = '10px sans-serif';
+  ctx.font = '13px sans-serif';
   ctx.textAlign = 'right';
   ctx.textBaseline = 'middle';
   for (const p of [0, 20, 40, 60, 80, 100]) {
@@ -886,7 +900,7 @@ function drawGradingChart() {
     return pad.left + ((Math.log10(mm) - logMin) / (logMax - logMin)) * pW;
   }
 
-  const xTicks = [1, 2, 4.75, 9.5, 19, 26.5, 37.5, 52, 75, 100];
+  const xTicks = [1, 2, 4.75, 9.5, 19, 26.5, 37.5, 53, 75, 100];
   ctx.textAlign = 'center';
   ctx.textBaseline = 'top';
   for (const s of xTicks) {
@@ -899,28 +913,29 @@ function drawGradingChart() {
     ctx.lineTo(x, pad.top + pH);
     ctx.stroke();
     ctx.fillStyle = isMain ? '#333' : '#999';
-    ctx.font = isMain ? '10px sans-serif' : '8px sans-serif';
+    ctx.font = isMain ? '13px sans-serif' : '10px sans-serif';
     ctx.fillText(`${s}`, x, pad.top + pH + 2);
   }
 
-  ctx.font = '8px sans-serif';
+  ctx.font = '15px sans-serif';
   ctx.fillStyle = '#555';
   ctx.textAlign = 'center';
-  ctx.fillText('粒径 (mm)', pad.left + pW / 2, pad.top + pH + 20);
+  ctx.fillText('粒径 (mm)', pad.left + pW / 2, pad.top + pH + 32);
 
   ctx.save();
-  ctx.translate(9, pad.top + pH / 2);
+  ctx.translate(14, pad.top + pH / 2);
   ctx.rotate(-Math.PI / 2);
   ctx.textAlign = 'center';
+  ctx.font = '15px sans-serif';
   ctx.fillText('通過質量百分率 (%)', 0, 0);
   ctx.restore();
 
   if (totalMass < 0.01) {
     ctx.fillStyle = '#aaa';
-    ctx.font = '11px sans-serif';
+    ctx.font = '14px sans-serif';
     ctx.textAlign = 'center';
     ctx.fillText('粒子を落としてください', W / 2, H / 2);
-    paramsEl.textContent = '';
+    paramsEl.textContent = '\n\n';
     return;
   }
 
@@ -982,16 +997,16 @@ function drawGradingChart() {
   if (d60 !== null) txt += `D\u2086\u2080=${d60.toFixed(1)}mm`;
   if (d10 !== null && d60 !== null) {
     const Cu = d60 / d10;
-    txt += `\nCu=${Cu.toFixed(2)}`;
+    txt += `  Cu=${Cu.toFixed(2)}`;
     if (d30 !== null) {
       const Cc = (d30 * d30) / (d10 * d60);
       txt += `  Cc=${Cc.toFixed(2)}`;
       if (Cu >= 4 && Cc >= 1 && Cc <= 3) {
-        txt += '\n\u2192 良粒度礫 (GW)';
+        txt += '  \u2192 良粒度礫 (GW)';
       } else if (Cu >= 6 && Cc >= 1 && Cc <= 3) {
-        txt += '\n\u2192 良粒度砂 (SW)';
+        txt += '  \u2192 良粒度砂 (SW)';
       } else {
-        txt += '\n\u2192 不良粒度 (GP/SP)';
+        txt += '  \u2192 不良粒度 (GP/SP)';
       }
     }
   }
@@ -1020,10 +1035,10 @@ function interpD(target: number, pts: { x: number; y: number }[]): number | null
 
 function updateNextPreview() {
   const ctx = nCtx;
-  const s = 60;
+  const s = 120;
   ctx.clearRect(0, 0, s, s);
   const r = LEVELS[nextLevel].radius;
-  const sc = Math.min(24 / r, 1);
+  const sc = Math.min(50 / r, 1);
   ctx.save();
   ctx.translate(s / 2, s / 2);
   ctx.scale(sc, sc);

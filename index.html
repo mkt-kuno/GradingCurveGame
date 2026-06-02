@@ -6,34 +6,40 @@
 <title>粒度分布ゲーム ～土質工学スイカゲーム～</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
-body{background:#0a0a1a;color:#eee;font-family:'Segoe UI','Helvetica Neue',sans-serif;display:flex;justify-content:center;align-items:flex-start;min-height:100vh;padding:12px;overflow-y:auto}
-#app{display:flex;gap:16px;flex-wrap:wrap;justify-content:center;align-items:flex-start;max-width:1500px}
-#left-panel{width:490px;display:flex;flex-direction:column;gap:12px}
-#game-section{position:relative}
+body{background:#0a0a1a;color:#eee;font-family:'Segoe UI','Helvetica Neue',sans-serif;display:flex;justify-content:center;align-items:flex-start;min-height:100vh;padding:8px;overflow-y:auto;font-size:16px}
+#app{display:flex;gap:12px;flex-wrap:wrap;justify-content:center;align-items:flex-start;max-width:1920px;width:100%}
+#left-panel{width:612px;display:flex;flex-direction:column;gap:12px;flex-shrink:0}
+#game-section{position:relative;flex-shrink:0}
 #game-canvas{border-radius:12px;display:block;cursor:crosshair}
 #game-over{display:none;position:absolute;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.78);border-radius:12px;flex-direction:column;justify-content:center;align-items:center;gap:16px}
 #game-over h2{font-size:46px;color:#e94560}
 #game-over p{font-size:22px;color:#ccc}
 #game-over button{padding:14px 44px;font-size:22px;background:#e94560;color:#fff;border:none;border-radius:8px;cursor:pointer}
 #game-over button:hover{background:#c0392b}
-#right-panel{width:320px;display:flex;flex-direction:column;gap:12px}
-.panel{background:#16213e;border-radius:12px;padding:16px}
-.panel h3{font-size:13px;color:#e94560;text-transform:uppercase;letter-spacing:1px;margin-bottom:10px}
-#score-value{font-size:42px;font-weight:bold;color:#f7dc6f}
-#merge-count{font-size:13px;color:#888;margin-top:4px}
-#next-preview{display:flex;align-items:center;gap:12px}
+#right-panel{width:390px;display:flex;flex-direction:column;gap:12px;flex-shrink:0}
+.panel{background:#16213e;border-radius:12px;padding:18px}
+.panel h3{font-size:20px;color:#e94560;text-transform:uppercase;letter-spacing:1px;margin-bottom:12px}
+#score-value{font-size:52px;font-weight:bold;color:#f7dc6f}
+#merge-count{font-size:18px;color:#888;margin-top:4px}
+#next-preview{display:flex;align-items:center;gap:14px}
 #next-canvas{border-radius:6px}
-#next-name{font-size:18px;color:#ddd}
-#model-buttons{display:flex;gap:8px;margin-bottom:10px}
-#model-buttons button{flex:1;padding:9px 0;font-size:14px;font-weight:bold;border:2px solid #2a3a5e;background:transparent;color:#888;border-radius:6px;cursor:pointer;transition:all .2s}
+#next-name{font-size:24px;color:#ddd}
+#model-buttons{display:flex;gap:8px;margin-bottom:12px}
+#model-buttons button{flex:1;padding:12px 0;font-size:18px;font-weight:bold;border:2px solid #2a3a5e;background:transparent;color:#888;border-radius:6px;cursor:pointer;transition:all .2s}
 #model-buttons button.active{border-color:#e94560;color:#e94560;background:rgba(233,69,96,.1)}
 #model-buttons button:hover{border-color:#e94560}
-#chk-wrap{display:flex;align-items:center;font-size:14px;color:#aaa;cursor:pointer}
-#chk-forces{accent-color:#e94560;margin-right:8px}
+#chk-wrap{display:flex;align-items:center;font-size:18px;color:#aaa;cursor:pointer}
+#chk-forces{accent-color:#e94560;margin-right:8px;transform:scale(1.2)}
 #chart-canvas{display:block;border-radius:8px;width:100%}
-#grading-params{font-size:12px;color:#aaa;margin-top:8px;line-height:1.7;white-space:pre-line}
-#controls-panel p{font-size:13px;color:#888;line-height:1.9}
-@media(max-width:1100px){#app{flex-direction:column;align-items:center}#left-panel,#right-panel{width:100%;max-width:660px}}
+#grading-params{font-size:13px;color:#aaa;margin-top:8px;line-height:1.7;white-space:pre-line}
+#soil-class{margin-top:10px}
+.sc-title{font-size:17px;color:#e94560;letter-spacing:1px;margin-bottom:8px;font-weight:bold}
+.sc-row{display:flex;border-radius:8px;overflow:hidden;font-size:16px;text-align:center}
+.sc-cell{flex:1;padding:10px 4px;line-height:1.5;border-right:1px solid rgba(0,0,0,.15);color:#fff;text-shadow:-1px 0 0 #4E3420,1px 0 0 #4E3420,0 -1px 0 #4E3420,0 1px 0 #4E3420,-1px -1px 0 #4E3420,1px -1px 0 #4E3420,-1px 1px 0 #4E3420,1px 1px 0 #4E3420,-2px 0 0 #4E3420,2px 0 0 #4E3420,0 -2px 0 #4E3420,0 2px 0 #4E3420}
+.sc-cell:last-child{border-right:none}
+.sc-cell span{font-size:12px;opacity:.75}
+#controls-panel p{font-size:18px;color:#888;line-height:2.6}
+@media(max-width:1200px){#app{flex-direction:column;align-items:center}#left-panel,#right-panel{width:100%;max-width:800px}}
 </style>
 </head>
 <body>
@@ -41,12 +47,24 @@ body{background:#0a0a1a;color:#eee;font-family:'Segoe UI','Helvetica Neue',sans-
   <div id="left-panel">
     <div class="panel">
       <h3>粒径加積曲線 (Grading Curve)</h3>
-      <canvas id="chart-canvas" width="460" height="450"></canvas>
+      <canvas id="chart-canvas" width="540" height="585"></canvas>
       <div id="grading-params"></div>
+      <div id="soil-class">
+        <div class="sc-title">土粒子の区分 (JIS A 1204)</div>
+        <div class="sc-row">
+          <div class="sc-cell" style="background:#EAE4D8">粘土<br><span>&lt;0.005mm</span></div>
+          <div class="sc-cell" style="background:#E0D8C8">シルト<br><span>0.005～0.075</span></div>
+          <div class="sc-cell" style="background:#D2C4A8">砂<br><span>0.075～2mm</span></div>
+          <div class="sc-cell" style="background:#C4B49C">細礫<br><span>2～4.75mm</span></div>
+          <div class="sc-cell" style="background:#A89070">中礫<br><span>4.75～19mm</span></div>
+          <div class="sc-cell" style="background:#7E5E38">粗礫<br><span>19～75mm</span></div>
+          <div class="sc-cell" style="background:#4E3420">石分<br><span>≥75mm</span></div>
+        </div>
+      </div>
     </div>
   </div>
   <div id="game-section">
-    <canvas id="game-canvas" width="650" height="700"></canvas>
+    <canvas id="game-canvas" width="858" height="865"></canvas>
     <div id="game-over">
       <h2>GAME OVER</h2>
       <p>最終スコア: <span id="final-score">0</span></p>
@@ -62,7 +80,7 @@ body{background:#0a0a1a;color:#eee;font-family:'Segoe UI','Helvetica Neue',sans-
     <div class="panel">
       <h3>次の粒子</h3>
       <div id="next-preview">
-        <canvas id="next-canvas" width="70" height="70"></canvas>
+        <canvas id="next-canvas" width="160" height="160"></canvas>
         <span id="next-name"></span>
       </div>
     </div>
@@ -79,7 +97,7 @@ body{background:#0a0a1a;color:#eee;font-family:'Segoe UI','Helvetica Neue',sans-
     </div>
     <div class="panel" id="controls-panel">
       <h3>操作方法</h3>
-      <p>マウス/タッチ: 位置決め<br>クリック/タップ: ドロップ<br>← → / A D: 移動<br>スペース: ドロップ</p>
+      <p>マウス/タッチ: 位置決め<br/>クリック/タップ: ドロップ<br/>← → / A D: 移動<br/>スペース: ドロップ</p>
     </div>
   </div>
 </div>

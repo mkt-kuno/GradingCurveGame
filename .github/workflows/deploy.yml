@@ -22,13 +22,22 @@ jobs:
 
       - uses: oven-sh/setup-bun@v2
 
+      - name: Install dependencies
+        run: bun install
+
       - name: Build
         run: bun run build
+
+      - name: Prepare deploy directory
+        run: |
+          mkdir -p _deploy/dist
+          cp index.html _deploy/
+          cp dist/game.js _deploy/dist/
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: .
+          path: _deploy
 
   deploy:
     needs: build
