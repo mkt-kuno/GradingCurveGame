@@ -1,5 +1,5 @@
 // ================================================================
-// 粒度分布ゲーム - 土質工学スイカゲーム
+// 粒度分布ゲーム - 土質工学メロンゲーム
 // DEM (Discrete Element Method) Physics Engine
 // Contact: Hooke (linear) / Hertz (non-linear) + Tsuji damping
 // Integration: Velocity-Verlet (position-Verlet variant)
@@ -771,26 +771,34 @@ function drawGame() {
     const maxF = Math.max(...contactVis.map(c => c.force), 1);
     for (const c of contactVis) {
       const t = Math.min(c.force / maxF, 1);
-      const w = 2 + t * 10;
-      const r = w * 3;
-      const grad = ctx.createRadialGradient(c.x, c.y, 0, c.x, c.y, r);
-      const rC = Math.floor(255);
-      const gC = Math.floor(255 * (1 - t * 0.85));
-      const bC = Math.floor(50 * (1 - t));
-      const a1 = (0.7 + t * 0.3).toFixed(2);
-      const a2 = (0.3 + t * 0.3).toFixed(2);
-      grad.addColorStop(0, `rgba(${rC},${gC},${bC},${a1})`);
-      grad.addColorStop(0.5, `rgba(${rC},${Math.floor(gC * 0.6)},0,${a2})`);
-      grad.addColorStop(1, `rgba(${Math.floor(rC * 0.8)},0,0,0)`);
+      const baseR = 8 + t * 24;
+      const coreR = baseR * 0.3;
+      const midR = baseR * 0.6;
+      ctx.save();
+      ctx.shadowColor = t > 0.5
+        ? `rgba(255,${Math.floor(60 * (1 - t))},0,0.9)`
+        : `rgba(255,255,0,0.7)`;
+      ctx.shadowBlur = 12 + t * 18;
+      const grad = ctx.createRadialGradient(c.x, c.y, 0, c.x, c.y, baseR);
+      grad.addColorStop(0, `rgba(255,255,${Math.floor(220 * (1 - t))},1)`);
+      grad.addColorStop(0.2, `rgba(255,${Math.floor(255 * (1 - t * 0.8))},${Math.floor(50 * (1 - t))},${0.95 - t * 0.15})`);
+      grad.addColorStop(0.5, `rgba(${Math.floor(255 - 40 * t)},${Math.floor(80 * (1 - t))},0,${0.6 + t * 0.2})`);
+      grad.addColorStop(1, `rgba(${Math.floor(180 * t)},0,0,0)`);
       ctx.fillStyle = grad;
       ctx.beginPath();
-      ctx.arc(c.x, c.y, r, 0, Math.PI * 2);
+      ctx.arc(c.x, c.y, baseR, 0, Math.PI * 2);
       ctx.fill();
-      ctx.strokeStyle = `rgba(255,255,200,${0.3 + t * 0.5})`;
-      ctx.lineWidth = w;
+      ctx.strokeStyle = `rgba(255,255,200,${0.5 + t * 0.5})`;
+      ctx.lineWidth = 2 + t * 3;
       ctx.beginPath();
-      ctx.arc(c.x, c.y, r * 0.4, 0, Math.PI * 2);
+      ctx.arc(c.x, c.y, coreR, 0, Math.PI * 2);
       ctx.stroke();
+      ctx.strokeStyle = `rgba(255,255,100,${0.3 + t * 0.4})`;
+      ctx.lineWidth = 1 + t * 2;
+      ctx.beginPath();
+      ctx.arc(c.x, c.y, midR, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
     }
   }
 
