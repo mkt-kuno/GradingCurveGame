@@ -1,7 +1,8 @@
-const CACHE = 'grading-game-v2';
+const CACHE = 'grading-game-v3';
 const ASSETS = [
   './',
   './index.html',
+  './bgm.opus',
   './dist/game.js',
   './manifest.json',
   './icons/icon.svg',

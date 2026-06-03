@@ -12,7 +12,8 @@
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
-body{background:#0a0a1a;color:#eee;font-family:'Segoe UI','Helvetica Neue',sans-serif;display:flex;justify-content:center;align-items:flex-start;min-height:100vh;padding:8px;overflow-y:auto;font-size:16px}
+body{background:#0a0a1a;color:#eee;font-family:'Segoe UI','Helvetica Neue',sans-serif;display:flex;flex-direction:column;justify-content:flex-start;align-items:center;min-height:100vh;padding:8px;overflow-y:auto;font-size:16px}
+footer{width:100%;text-align:center;padding:12px 0 8px;font-size:11px;color:#444;font-weight:300}
 #app{display:flex;gap:12px;flex-wrap:wrap;justify-content:center;align-items:flex-start;max-width:1920px;width:100%}
 #left-panel{width:612px;display:flex;flex-direction:column;gap:12px;flex-shrink:0}
 #game-section{position:relative;flex-shrink:0}
@@ -108,6 +109,16 @@ body{background:#0a0a1a;color:#eee;font-family:'Segoe UI','Helvetica Neue',sans-
     </div>
   </div>
 </div>
+<audio id="bgm" src="bgm.opus" loop></audio>
+<footer>BGM: <a href="https://dova-s.jp/bgm/detail/8536" target="_blank" rel="noopener" style="color:#444;text-decoration:none">「実験中・証明中」</a> written by ゆーぎり (DOVA-SYNDROME)</footer>
 <script src="dist/game.js"></script>
+<script>
+(function(){
+  var bgm=document.getElementById('bgm');
+  var started=false;
+  function start(){if(!started){started=true;bgm.play().catch(function(err){console.warn('BGM playback failed:',err);});}}
+  ['click','touchstart','keydown'].forEach(function(e){document.addEventListener(e,start,{once:true,passive:true});});
+})();
+</script>
 </body>
 </html>
