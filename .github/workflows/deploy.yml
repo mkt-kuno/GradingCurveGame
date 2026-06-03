@@ -32,6 +32,7 @@ jobs:
         run: |
           mkdir -p _deploy/dist _deploy/icons
           cp index.html _deploy/
+          cp bgm.opus _deploy/
           cp dist/game.js _deploy/dist/
           cp sw.js _deploy/
           cp manifest.json _deploy/
