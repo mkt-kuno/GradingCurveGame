@@ -116,7 +116,7 @@ footer{width:100%;text-align:center;padding:12px 0 8px;font-size:11px;color:#444
 (function(){
   var bgm=document.getElementById('bgm');
   var started=false;
-  function start(){if(!started){started=true;bgm.play().catch(function(){});}}
+  function start(){if(!started){started=true;bgm.play().catch(function(err){console.warn('BGM playback failed:',err);});}}
   ['click','touchstart','keydown'].forEach(function(e){document.addEventListener(e,start,{once:true,passive:true});});
 })();
 </script>
