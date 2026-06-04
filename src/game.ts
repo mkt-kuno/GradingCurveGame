@@ -1022,7 +1022,7 @@ function drawGradingChart() {
     ctx.font = '14px sans-serif';
     ctx.textAlign = 'center';
     ctx.fillText('粒子を落としてください', W / 2, H / 2);
-    paramsEl.textContent = 'D\u2081\u2080=--mm  D\u2083\u2080=--mm  D\u2086\u2080=--mm  Cu=--  Cc=--';
+    paramsEl.textContent = 'D\u2081\u2080=--mm  D\u2083\u2080=--mm  D\u2085\u2080=--mm  D\u2086\u2080=--mm  Uc=--  Uc\'=--';
     return;
   }
 
@@ -1076,21 +1076,60 @@ function drawGradingChart() {
 
   const d10 = interpD(10, points);
   const d30 = interpD(30, points);
+  const d50 = interpD(50, points);
   const d60 = interpD(60, points);
+
+  const dLines = [
+    { d: d10, pct: 10, label: 'D\u2081\u2080', color: '#2196F3' },
+    { d: d30, pct: 30, label: 'D\u2083\u2080', color: '#4CAF50' },
+    { d: d50, pct: 50, label: 'D\u2085\u2080', color: '#9C27B0' },
+    { d: d60, pct: 60, label: 'D\u2086\u2080', color: '#FF5722' },
+  ];
+
+  for (const dl of dLines) {
+    if (dl.d === null) continue;
+    const hx = toX(dl.d);
+    const hy = pad.top + pH - (dl.pct / 100) * pH;
+    ctx.setLineDash([4, 3]);
+    ctx.strokeStyle = dl.color;
+    ctx.lineWidth = 1;
+    ctx.globalAlpha = 0.55;
+    ctx.beginPath();
+    ctx.moveTo(hx, pad.top);
+    ctx.lineTo(hx, pad.top + pH);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(pad.left, hy);
+    ctx.lineTo(pad.left + pW, hy);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+    ctx.setLineDash([]);
+    ctx.fillStyle = dl.color;
+    ctx.font = 'bold 10px sans-serif';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'bottom';
+    ctx.fillText(dl.label, hx + 4, hy - 3);
+    ctx.textBaseline = 'alphabetic';
+    ctx.beginPath();
+    ctx.arc(hx, hy, 4, 0, Math.PI * 2);
+    ctx.fillStyle = dl.color;
+    ctx.fill();
+  }
 
   let txt = '';
   if (d10 !== null) txt += `D\u2081\u2080=${d10.toFixed(1)}mm  `;
   if (d30 !== null) txt += `D\u2083\u2080=${d30.toFixed(1)}mm  `;
+  if (d50 !== null) txt += `D\u2085\u2080=${d50.toFixed(1)}mm  `;
   if (d60 !== null) txt += `D\u2086\u2080=${d60.toFixed(1)}mm`;
   if (d10 !== null && d60 !== null) {
-    const Cu = d60 / d10;
-    txt += `  Cu=${Cu.toFixed(2)}`;
+    const Uc = d60 / d10;
+    txt += `  Uc=${Uc.toFixed(2)}`;
     if (d30 !== null) {
-      const Cc = (d30 * d30) / (d10 * d60);
-      txt += `  Cc=${Cc.toFixed(2)}`;
-      if (Cu >= 4 && Cc >= 1 && Cc <= 3) {
+      const Ucp = (d30 * d30) / (d10 * d60);
+      txt += `  Uc'=${Ucp.toFixed(2)}`;
+      if (Uc >= 4 && Ucp >= 1 && Ucp <= 3) {
         txt += '  \u2192 良粒度礫 (GW)';
-      } else if (Cu >= 6 && Cc >= 1 && Cc <= 3) {
+      } else if (Uc >= 6 && Ucp >= 1 && Ucp <= 3) {
         txt += '  \u2192 良粒度砂 (SW)';
       } else {
         txt += '  \u2192 不良粒度 (GP/SP)';
