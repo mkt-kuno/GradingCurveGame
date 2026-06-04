@@ -23,13 +23,13 @@ footer{width:100%;text-align:center;padding:12px 0 8px;font-size:11px;color:#444
 #game-section{position:relative;flex-shrink:0}
 #game-canvas{border-radius:12px;display:block;cursor:crosshair}
 #game-over{display:none;position:absolute;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.78);border-radius:12px;flex-direction:column;justify-content:center;align-items:center;gap:16px}
-#game-over h2{font-size:46px;color:#e94560}
+#game-over h2{font-size:46px;color:#FF6B00}
 #game-over p{font-size:22px;color:#ccc}
-#game-over button{padding:14px 44px;font-size:22px;background:#e94560;color:#fff;border:none;border-radius:8px;cursor:pointer}
-#game-over button:hover{background:#c0392b}
+#game-over button{padding:14px 44px;font-size:22px;background:#FF6B00;color:#fff;border:none;border-radius:8px;cursor:pointer}
+#game-over button:hover{background:#CC5500}
 #right-panel{width:390px;display:flex;flex-direction:column;gap:12px;flex-shrink:0}
 .panel{background:#16213e;border-radius:12px;padding:18px}
-.panel h3{font-size:20px;color:#e94560;text-transform:uppercase;letter-spacing:1px;margin-bottom:12px}
+.panel h3{font-size:20px;color:#FF6B00;text-transform:uppercase;letter-spacing:1px;margin-bottom:12px}
 #score-value{font-size:52px;font-weight:bold;color:#f7dc6f}
 #merge-count{font-size:18px;color:#888;margin-top:4px}
 #next-preview{display:flex;align-items:center;gap:14px}
@@ -37,14 +37,14 @@ footer{width:100%;text-align:center;padding:12px 0 8px;font-size:11px;color:#444
 #next-name{font-size:24px;color:#ddd}
 #model-buttons{display:flex;gap:8px;margin-bottom:12px}
 #model-buttons button{flex:1;padding:12px 0;font-size:18px;font-weight:bold;border:2px solid #2a3a5e;background:transparent;color:#888;border-radius:6px;cursor:pointer;transition:all .2s}
-#model-buttons button.active{border-color:#e94560;color:#e94560;background:rgba(233,69,96,.1)}
-#model-buttons button:hover{border-color:#e94560}
+#model-buttons button.active{border-color:#FF6B00;color:#FF6B00;background:rgba(233,69,96,.1)}
+#model-buttons button:hover{border-color:#FF6B00}
 #chk-wrap{display:flex;align-items:center;font-size:18px;color:#aaa;cursor:pointer}
-#chk-forces{accent-color:#e94560;margin-right:8px;transform:scale(1.2)}
+#chk-forces{accent-color:#FF6B00;margin-right:8px;transform:scale(1.2)}
 #chart-canvas{display:block;border-radius:8px;width:100%}
 #grading-params{font-size:15px;color:#aaa;margin-top:8px;line-height:1.7;white-space:pre-line}
 #soil-class{margin-top:10px}
-.sc-title{font-size:17px;color:#e94560;letter-spacing:1px;margin-bottom:8px;font-weight:bold}
+.sc-title{font-size:17px;color:#FF6B00;letter-spacing:1px;margin-bottom:8px;font-weight:bold}
 .sc-row{display:flex;border-radius:8px;overflow:hidden;font-size:16px;text-align:center}
 .sc-cell{flex:1;padding:10px 4px;line-height:1.5;border-right:1px solid rgba(0,0,0,.15);color:#fff;text-shadow:-1px 0 0 #4E3420,1px 0 0 #4E3420,0 -1px 0 #4E3420,0 1px 0 #4E3420,-1px -1px 0 #4E3420,1px -1px 0 #4E3420,-1px 1px 0 #4E3420,1px 1px 0 #4E3420,-2px 0 0 #4E3420,2px 0 0 #4E3420,0 -2px 0 #4E3420,0 2px 0 #4E3420}
 .sc-cell:last-child{border-right:none}
@@ -87,7 +87,7 @@ footer{width:100%;text-align:center;padding:12px 0 8px;font-size:11px;color:#444
       <h3>スコア</h3>
       <div id="score-value">0</div>
       <div id="high-score">今日のハイスコア: 0</div>
-      <button id="score-restart-btn" style="margin-top:12px;width:100%;padding:10px 0;font-size:16px;font-weight:bold;background:#e94560;color:#fff;border:none;border-radius:6px;cursor:pointer;transition:background .2s">リセット</button>
+      <button id="score-restart-btn" style="margin-top:12px;width:100%;padding:10px 0;font-size:16px;font-weight:bold;background:#FF6B00;color:#fff;border:none;border-radius:6px;cursor:pointer;transition:background .2s">リセット</button>
     </div>
     <div class="panel">
       <h3>次の粒子</h3>
