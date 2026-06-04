@@ -39,19 +39,19 @@ const SIEVE_SIZES = [0.75, 2, 4.75, 9.5, 19, 26.5, 37.5, 53, 75];
 
 // ================================================================
 // Game Dimensions — 1:1 container (792 x 792 inner)
-// Canvas 858 x 924: 33px walls, 99px drop zone at top
+// Canvas 858 x 925: 33px walls, 99px drop zone at top
 // ================================================================
 
 const GAME_W = 858;
-const GAME_H = 865;
+const GAME_H = 925;
 const WALL_T = 33;
 const CL = WALL_T;
 const CR = GAME_W - WALL_T;         // 825
-const CB = GAME_H - WALL_T;         // 832
+const CB = GAME_H - WALL_T;         // 892
 const CONTAINER_W = CR - CL;         // 792
-const CONTAINER_H = CB - WALL_T;     // 719
+const CONTAINER_H = CB - WALL_T;     // 779
 const DROP_Y = 72;
-const DANGER_Y = 116;
+const DANGER_Y = 176;
 
 // ================================================================
 // Material Properties
