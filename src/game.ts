@@ -1,122 +1,22 @@
 // ================================================================
 // 粒度分布ゲーム - 土質工学メロンゲーム
-// DEM (Discrete Element Method) Physics Engine
-// Contact: Hooke (linear) / Hertz (non-linear) + Tsuji damping
-// Integration: Velocity-Verlet (position-Verlet variant)
-// Tangential: Coulomb friction with rotational sliding
-// Rolling friction: CDT model
-// References: Tsuji et al.(1992), Silbert et al.(2001), LAMMPS pair_granular
+// DEM Physics + GPU Rendering (WebGPU / WebGL2 / Canvas2D fallback)
+// Phase 1: CPU optimizations (spatial hash, no shadowBlur, cache, throttled chart)
+// Phase 2: WebGL2 instanced rendering + FBO glow
+// Phase 3: WebGPU rendering
 // ================================================================
 
-// ================================================================
-// Particle Levels (JIS A 1204, radii x2)
-// ================================================================
+import {
+  LEVELS, SIEVE_SIZES, GAME_W, GAME_H, WALL_T, CL, CR, CB, CONTAINER_W, CONTAINER_H,
+  DROP_Y, DANGER_Y, GRAVITY, ESTAR_PP, ESTAR_PW, KN_PP, KN_PW,
+  MU_PP, MU_PW, REST_PP, REST_PW, MU_ROLL_PP, MU_ROLL_PW,
+  SUB_STEPS, MAX_DELTA_RATIO, MAX_VEL, MAX_OMEGA, VEL_DAMP, ANG_DAMP,
+  BETA_PP, BETA_PW,
+} from './constants';
 
-interface ParticleLevel {
-  name: string;
-  sieve: string;
-  upperSieveMM: number;
-  radius: number;
-  color: string;
-  strokeColor: string;
-  score: number;
-}
-
-const LEVELS: ParticleLevel[] = [
-  { name: '砂',     sieve: '0.75mm',  upperSieveMM: 2,     radius: 22, color: '#FDF5E6', strokeColor: '#C8B89C', score: 1 },
-  { name: '細礫',   sieve: '2mm',     upperSieveMM: 4.75,  radius: 30, color: '#F8EED8', strokeColor: '#C4B49C', score: 2 },
-  { name: '中礫',   sieve: '4.75mm',  upperSieveMM: 9.5,   radius: 42, color: '#F5E6CC', strokeColor: '#B8A48A', score: 4 },
-  { name: '中礫',   sieve: '9.5mm',   upperSieveMM: 19,    radius: 60, color: '#EAD5B8', strokeColor: '#A89070', score: 7 },
-  { name: '粗礫',   sieve: '19mm',    upperSieveMM: 26.5,  radius: 81, color: '#DCC4A0', strokeColor: '#9A7C5A', score: 11 },
-  { name: '粗礫',   sieve: '26.5mm',  upperSieveMM: 37.5,  radius: 105, color: '#D0B48E', strokeColor: '#8C6C46', score: 16 },
-  { name: '粗礫',   sieve: '37.5mm',  upperSieveMM: 53,    radius: 132, color: '#C2A47A', strokeColor: '#7E5E38', score: 22 },
-  { name: '粗礫',   sieve: '53mm',    upperSieveMM: 75,    radius: 162, color: '#B49468', strokeColor: '#6E5030', score: 29 },
-  { name: '石分',   sieve: '75mm',    upperSieveMM: 100,   radius: 195, color: '#A28458', strokeColor: '#5E4228', score: 37 },
-  { name: '石分',   sieve: '100mm+',  upperSieveMM: 150,   radius: 231, color: '#907448', strokeColor: '#4E3420', score: 46 },
-];
-
-const SIEVE_SIZES = [0.75, 2, 4.75, 9.5, 19, 26.5, 37.5, 53, 75];
-
-// ================================================================
-// Game Dimensions — 1:1 container (792 x 792 inner)
-// Canvas 858 x 925: 33px walls, 99px drop zone at top
-// ================================================================
-
-const GAME_W = 858;
-const GAME_H = 925;
-const WALL_T = 33;
-const CL = WALL_T;
-const CR = GAME_W - WALL_T;         // 825
-const CB = GAME_H - WALL_T;         // 892
-const CONTAINER_W = CR - CL;         // 792
-const CONTAINER_H = CB - WALL_T;     // 779
-const DROP_Y = 72;
-const DANGER_Y = 176;
-
-// ================================================================
-// Material Properties
-// ================================================================
-// Silica sand (珪砂): E=70GPa, ν=0.17, ρ=2650kg/m³
-// NBR rubber (wall):  E=10MPa, ν=0.49
-//
-// E* derivation:
-//   PP (sand-sand): 1/E* = 2(1-0.17²)/70e9 → E* ≈ 36.0 GPa
-//   PW (sand-NBR):  1/E* = (1-0.17²)/70e9 + (1-0.49²)/10e6 → E* ≈ 13.2 MPa
-//   Ratio E*_PP/E*_PW ≈ 2740
-//
-// Pixel-space values scaled for gameplay while preserving ratio
-
-// Material Properties — 全て珪砂 (Silica sand)
-// ================================================================
-// Silica sand (珪砂, e.g. Toyoura sand):
-//   E = 70 GPa,  ν = 0.17,  ρ = 2650 kg/m³
-//   Internal friction angle φ ≈ 30° → μ ≈ 0.45
-//   Restitution e ≈ 0.50
-//   Rolling friction μ_r ≈ 0.02-0.05
-//
-// E* derivation (Hertz):
-//   PP (sand-sand): 1/E* = 2(1-0.17²)/70e9 → E* ≈ 36.0 GPa
-//   PW (sand-wall): 壁も珪砂 → E* ≈ 36.0 GPa (same as PP)
-//
-// Pixel-space values scaled for gameplay
-
-const GRAVITY = 700;
-
-// Hertz: F_n = (4/3)·E*·√R*·δ^(3/2)
-const ESTAR_PP = 10000;
-const ESTAR_PW = 10000;           // 壁も珪砂 → PPと同じ
-
-// Hooke: F_n = k_n · δ
-const KN_PP = 100000;
-const KN_PW = 100000;             // 壁も珪砂 → PPと同じ
-
-const MU_PP = 0.65;               // 珪砂内部摩擦 (φ≈33°, tan33°≈0.65)
-const MU_PW = 0.80;               // 壁も珪砂 → 同じ
-const REST_PP = 0.35;             // 珪砂-珪砂反発係数 (文献: 0.3-0.5)
-const REST_PW = 0.35;             // 壁も珪砂 → 同じ
-
-// Rolling friction (CDT): μ_r for angular silica sand
-// Benmebarek (2023): 0.1-0.6; Gu (2020): ~0.2; Rorato (2021): image-based 0.1-0.3
-const MU_ROLL_PP = 0.15;         // PP: 珪砂粒子間 (文献範囲 0.1-0.2)
-const MU_ROLL_PW = 0.30;         // PW: 壁面 (文献範囲 0.2-0.4)
-
-// β = −ln(e) / √(π²+ln²(e))  (Tsuji damping)
-function beta(e: number): number {
-  if (e <= 0) return 1;
-  if (e >= 1) return 0;
-  const ln = Math.log(e);
-  return -ln / Math.sqrt(Math.PI * Math.PI + ln * ln);
-}
-
-const BETA_PP = beta(REST_PP);
-const BETA_PW = beta(REST_PW);
-
-const SUB_STEPS = 10;
-const MAX_DELTA_RATIO = 0.08;     // max overlap = 8% of min radius
-const MAX_VEL = 3000;
-const MAX_OMEGA = 80;
-const VEL_DAMP = 0.9995;          // per substep air drag
-const ANG_DAMP = 0.998;           // per substep angular drag
+import { SpatialHash } from './spatial';
+import { WebGL2Renderer } from './renderer-webgl2';
+import { WebGPURenderer } from './renderer-webgpu';
 
 // ================================================================
 // Types
@@ -130,34 +30,17 @@ interface Particle {
   vy: number;
   radius: number;
   mass: number;
-  inertia: number;                // I = 0.5·m·R² (2D disk)
+  inertia: number;
   level: number;
   angle: number;
-  omega: number;                  // angular velocity (rad/s)
-  active: boolean;                // true once center has been below DANGER_Y
-  graceFrames: number;            // frames of immunity after merge
+  omega: number;
+  active: boolean;
+  graceFrames: number;
 }
 
-interface ContactVis {
-  x: number;
-  y: number;
-  force: number;
-}
-
-interface Effect {
-  x: number;
-  y: number;
-  r: number;
-  alpha: number;
-  color: string;
-}
-
-interface ScorePopup {
-  x: number;
-  y: number;
-  text: string;
-  timer: number;
-}
+interface ContactVis { x: number; y: number; force: number; }
+interface Effect { x: number; y: number; r: number; alpha: number; color: string; }
+interface ScorePopup { x: number; y: number; text: string; timer: number; }
 
 type ContactModel = 'hooke' | 'hertz';
 
@@ -185,25 +68,16 @@ let showForceChains = true;
 let comboCount = 0;
 let comboTimer = 0;
 
+// Spatial hash
+const spatialHash = new SpatialHash(500);
 
-function getTodayKey(): string {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-}
+// Chart dirty flag for throttling
+let chartDirty = true;
+let lastChartFrame = 0;
 
-function loadHighScore(): number {
-  try {
-    const data = localStorage.getItem('granularity_highscore');
-    if (!data) return 0;
-    const parsed = JSON.parse(data) as { date: string; score: number };
-    if (parsed.date === getTodayKey()) return parsed.score;
-    return 0;
-  } catch { return 0; }
-}
-
-function saveHighScore(s: number) {
-  localStorage.setItem('granularity_highscore', JSON.stringify({ date: getTodayKey(), score: s }));
-}
+// Renderer
+let gpuRenderer: WebGL2Renderer | WebGPURenderer | null = null;
+let rendererName = 'Canvas2D';
 
 // ================================================================
 // DOM
@@ -227,62 +101,173 @@ const btnHooke = document.getElementById('btn-hooke') as HTMLButtonElement;
 const btnHertz = document.getElementById('btn-hertz') as HTMLButtonElement;
 const chkForces = document.getElementById('chk-forces') as HTMLInputElement;
 
+function getTodayKey(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+function loadHighScore(): number {
+  try {
+    const data = localStorage.getItem('granularity_highscore');
+    if (!data) return 0;
+    const parsed = JSON.parse(data) as { date: string; score: number };
+    if (parsed.date === getTodayKey()) return parsed.score;
+    return 0;
+  } catch { return 0; }
+}
+
+function saveHighScore(s: number) {
+  localStorage.setItem('granularity_highscore', JSON.stringify({ date: getTodayKey(), score: s }));
+}
+
 let highScore = loadHighScore();
 highScoreEl.textContent = `今日のハイスコア: ${highScore}`;
 
 // ================================================================
-// DEM Physics
+// Renderer Detection
 // ================================================================
-//
-// Normal force:
-//   Hooke:  F_ne = k_n · δ
-//   Hertz:  F_ne = (4/3)·E*·√R* · δ^(3/2)
-//   Damping: F_nd = −η_n · v_n   where η_n = 2β·√(m*·k_eff)
-//     Hooke k_eff = k_n
-//     Hertz k_eff = dF/dδ = 2·E*·√(R*·δ)
-//   F_n = max(0, F_ne + F_nd)
-//
-// Tangential sliding velocity at contact (2D):
-//   PP: v_slide = (v_B − v_A)·t̂ − (ω_A·R_A + ω_B·R_B)
-//       where t̂ = (−ny, nx), r_A = R_A·n̂, r_B = −R_B·n̂
-//   Wall (bottom, r_cp=(0,R)): v_slide = vx − ω·R
-//   Wall (left,   r_cp=(−R,0)): v_slide = vy − ω·R
-//   Wall (right,  r_cp=(R,0)):  v_slide = vy + ω·R
-//
-// Tangential force (Coulomb with Tsuji viscous regularization):
-//   η_t = 2β·√(m*·k_t_eff)
-//     Hooke: k_t_eff = k_n
-//     Hertz: k_t_eff = 2·E*·√(R*·δ)
-//   |F_t| = min(μ·F_n, η_t · |v_slide|)
-//   F_t opposes v_slide
-//
-// Torque from tangential force:
-//   τ = r_cp × F_t  (2D scalar: rx·Fy − ry·Fx)
-//   PP: τ_A = sign(v_slide)·|F_t|·R_A, τ_B = sign(v_slide)·|F_t|·R_B
-//   Bottom wall: Δω = +sign(v_slide)·F_t·R / I
-//   Left wall:   Δω = +sign(v_slide)·F_t·R / I
-//   Right wall:  Δω = −sign(v_slide)·F_t·R / I
-//
-// Rolling friction (CDT): τ_roll = −μ_r · R* · F_n · sign(ω_rel)
-//
-// Moment of inertia: I = 0.5·m·R²
+
+async function initRenderer() {
+  // Try WebGPU first
+  try {
+    if ('gpu' in navigator) {
+      const adapter = await (navigator as any).gpu.requestAdapter();
+      if (adapter) {
+        const device = await adapter.requestDevice();
+        gpuRenderer = new WebGPURenderer(gameCanvas, device);
+        rendererName = 'WebGPU Enable';
+        return;
+      }
+    }
+  } catch (e) {
+    console.log('WebGPU not available:', e);
+  }
+
+  // Try WebGL2
+  try {
+    const gl = gameCanvas.getContext('webgl2');
+    if (gl) {
+      gpuRenderer = new WebGL2Renderer(gameCanvas);
+      rendererName = 'WebGL2 Enable';
+      return;
+    }
+  } catch (e) {
+    console.log('WebGL2 not available:', e);
+  }
+
+  // Canvas2D fallback
+  rendererName = 'Canvas2D';
+}
+
+// ================================================================
+// Particle Cache (Canvas2D fallback)
+// ================================================================
+
+const PARTICLE_CACHE: HTMLCanvasElement[] = [];
+
+function hexToRGBA(hex: string, alpha: number): string {
+  const n = parseInt(hex.slice(1), 16);
+  return `rgba(${(n >> 16) & 0xFF},${(n >> 8) & 0xFF},${n & 0xFF},${alpha})`;
+}
+
+function lighten(hex: string, amt: number): string {
+  const n = parseInt(hex.slice(1), 16);
+  const r = Math.min(255, ((n >> 16) & 0xFF) + amt);
+  const g = Math.min(255, ((n >> 8) & 0xFF) + amt);
+  const b = Math.min(255, (n & 0xFF) + amt);
+  return `#${((r << 16) | (g << 8) | b).toString(16).padStart(6, '0')}`;
+}
+
+function mulberry32(seed: number): () => number {
+  let s = seed | 0;
+  return () => {
+    s = (s + 0x6D2B79F5) | 0;
+    let t = Math.imul(s ^ (s >>> 15), 1 | s);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function initParticleCache() {
+  if (PARTICLE_CACHE.length > 0) return;
+  for (let level = 0; level < LEVELS.length; level++) {
+    const info = LEVELS[level];
+    const r = info.radius;
+    const pad = 10;
+    const size = r * 2 + pad * 2;
+    const canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext('2d')!;
+    const cx = size / 2;
+    const cy = size / 2;
+
+    // Shadow
+    ctx.beginPath();
+    ctx.arc(cx + 2, cy + 3, r, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(0,0,0,0.15)';
+    ctx.fill();
+
+    // Gradient
+    const grad = ctx.createRadialGradient(cx - r * 0.25, cy - r * 0.25, r * 0.05, cx, cy, r);
+    grad.addColorStop(0, lighten(info.color, 35));
+    grad.addColorStop(1, info.color);
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.fillStyle = grad;
+    ctx.fill();
+    ctx.strokeStyle = info.strokeColor;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    // Dots
+    const rng = mulberry32(level * 54321 + 7);
+    const dotN = Math.min(level * 4 + 3, 18);
+    for (let i = 0; i < dotN; i++) {
+      const ddx = (rng() - 0.5) * r * 1.4;
+      const ddy = (rng() - 0.5) * r * 1.4;
+      if (ddx * ddx + ddy * ddy < (r * 0.7) ** 2) {
+        ctx.beginPath();
+        ctx.arc(cx + ddx, cy + ddy, Math.max(1, r * 0.05), 0, Math.PI * 2);
+        ctx.fillStyle = hexToRGBA(info.strokeColor, 0.3);
+        ctx.fill();
+      }
+    }
+
+    PARTICLE_CACHE[level] = canvas;
+  }
+}
+
+function drawParticleCached(ctx: CanvasRenderingContext2D, x: number, y: number, angle: number, level: number) {
+  const cache = PARTICLE_CACHE[level];
+  const r = LEVELS[level].radius;
+  const pad = 10;
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(angle);
+  ctx.drawImage(cache, -r - pad, -r - pad);
+
+  // Sieve text
+  const fontSize = Math.max(8, Math.floor(r * 0.3));
+  ctx.font = `bold ${fontSize}px sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#3E2723';
+  ctx.fillText(LEVELS[level].sieve, 0, 0);
+  ctx.restore();
+}
+
+// ================================================================
+// DEM Physics (CPU with spatial hash)
 // ================================================================
 
 function createParticle(x: number, y: number, level: number): Particle {
   const r = LEVELS[level].radius;
   const m = r * r * 0.008;
   return {
-    id: nextId++,
-    x, y,
-    vx: 0, vy: 0,
-    radius: r,
-    mass: m,
-    inertia: 0.5 * m * r * r,
-    level,
-    angle: 0,
-    omega: 0,
-    active: false,
-    graceFrames: 0,
+    id: nextId++, x, y, vx: 0, vy: 0, radius: r, mass: m,
+    inertia: 0.5 * m * r * r, level, angle: 0, omega: 0,
+    active: false, graceFrames: 0,
   };
 }
 
@@ -307,10 +292,8 @@ function computeNormalForce(
   eStar: number, kn: number, b: number,
 ): number {
   if (delta <= 0) return 0;
-
   let fElastic: number;
   let kEff: number;
-
   if (contactModel === 'hertz') {
     fElastic = hertzNormalForce(delta, rEff, eStar);
     kEff = 2 * eStar * Math.sqrt(Math.max(rEff * delta, 0.01));
@@ -318,10 +301,7 @@ function computeNormalForce(
     fElastic = hookeNormalForce(delta, kn);
     kEff = kn;
   }
-
   const eta = 2 * b * Math.sqrt(Math.max(mEff * kEff, 0.001));
-  // vn > 0 = separating, damping reduces force
-  // vn < 0 = approaching, damping increases force
   return Math.max(0, fElastic - eta * vn);
 }
 
@@ -329,129 +309,107 @@ function physicsStep(dt: number) {
   const newContactVis: ContactVis[] = [];
   const newPairs = new Set<string>();
 
-  // --- Gravity ---
+  // Gravity
   for (const p of particles) {
     p.vy += GRAVITY * dt;
   }
 
-  // --- Particle-Particle contacts ---
-  for (let i = 0; i < particles.length; i++) {
-    for (let j = i + 1; j < particles.length; j++) {
-      const a = particles[i];
-      const b = particles[j];
+  // Build spatial hash
+  spatialHash.build(particles);
 
-      const dx = b.x - a.x;
-      const dy = b.y - a.y;
-      const distSq = dx * dx + dy * dy;
-      const minDist = a.radius + b.radius;
-      if (distSq >= minDist * minDist) continue;
+  // Particle-Particle contacts via spatial hash
+  for (const [i, j] of spatialHash.findPairs(particles)) {
+    const a = particles[i];
+    const b = particles[j];
 
-      const dist = Math.sqrt(Math.max(distSq, 1e-8));
-      let delta = minDist - dist;
-      if (delta <= 0) continue;
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const distSq = dx * dx + dy * dy;
+    const minDist = a.radius + b.radius;
+    if (distSq >= minDist * minDist) continue;
 
-      // Overlap cap (anti-divergence)
-      const maxDelta = MAX_DELTA_RATIO * Math.min(a.radius, b.radius);
-      delta = Math.min(delta, maxDelta);
+    const dist = Math.sqrt(Math.max(distSq, 1e-8));
+    let delta = minDist - dist;
+    if (delta <= 0) continue;
 
-      const nx = dx / dist;
-      const ny = dy / dist;
-      const tx = -ny;
-      const ty = nx;
+    const maxDelta = MAX_DELTA_RATIO * Math.min(a.radius, b.radius);
+    delta = Math.min(delta, maxDelta);
 
-      // Relative velocity of B w.r.t. A
-      const dvx = b.vx - a.vx;
-      const dvy = b.vy - a.vy;
+    const nx = dx / dist;
+    const ny = dy / dist;
+    const tx = -ny;
+    const ty = nx;
 
-      // Normal relative velocity (positive = separating)
-      const vn = dvx * nx + dvy * ny;
+    const dvx = b.vx - a.vx;
+    const dvy = b.vy - a.vy;
+    const vn = dvx * nx + dvy * ny;
+    const vSlide = (dvx * tx + dvy * ty) - a.omega * a.radius - b.omega * b.radius;
 
-      // Tangential sliding velocity at contact point INCLUDING rotation
-      // v_slide = (v_B − v_A)·t̂ − (ω_A·R_A + ω_B·R_B)
-      const vSlide = (dvx * tx + dvy * ty) - a.omega * a.radius - b.omega * b.radius;
+    const mEff = (a.mass * b.mass) / (a.mass + b.mass);
+    const rEff = (a.radius * b.radius) / (a.radius + b.radius);
 
-      // Effective quantities
-      const mEff = (a.mass * b.mass) / (a.mass + b.mass);
-      const rEff = (a.radius * b.radius) / (a.radius + b.radius);
+    const fn = computeNormalForce(delta, rEff, mEff, vn, ESTAR_PP, KN_PP, BETA_PP);
 
-      // Normal force
-      const fn = computeNormalForce(delta, rEff, mEff, vn, ESTAR_PP, KN_PP, BETA_PP);
+    const kTEffPP = contactModel === 'hertz'
+      ? 2 * ESTAR_PP * Math.sqrt(Math.max(rEff * delta, 0.01))
+      : KN_PP;
+    const ftDamp = 2 * BETA_PP * Math.sqrt(Math.max(mEff * kTEffPP, 0.001));
+    const ftMag = Math.min(MU_PP * fn, ftDamp * Math.abs(vSlide));
+    const ftSign = vSlide > 0.001 ? -1 : vSlide < -0.001 ? 1 : 0;
 
-      // Tangential force (Coulomb with Tsuji damping)
-      // η_t = 2β√(m*·k_t_eff)
-      // Hooke: k_t_eff = k_n,  Hertz: k_t_eff = 2E*√(R*δ)
-      const kTEffPP = contactModel === 'hertz'
-        ? 2 * ESTAR_PP * Math.sqrt(Math.max(rEff * delta, 0.01))
-        : KN_PP;
-      const ftDamp = 2 * BETA_PP * Math.sqrt(Math.max(mEff * kTEffPP, 0.001));
-      const ftMag = Math.min(MU_PP * fn, ftDamp * Math.abs(vSlide));
-      const ftSign = vSlide > 0.001 ? -1 : vSlide < -0.001 ? 1 : 0;
+    const fx = fn * nx + ftSign * ftMag * tx;
+    const fy = fn * ny + ftSign * ftMag * ty;
 
-      // Total force on B in n-direction and t-direction
-      const fx = fn * nx + ftSign * ftMag * tx;
-      const fy = fn * ny + ftSign * ftMag * ty;
+    b.vx += (fx / b.mass) * dt;
+    b.vy += (fy / b.mass) * dt;
+    a.vx -= (fx / a.mass) * dt;
+    a.vy -= (fy / a.mass) * dt;
 
-      // Translational acceleration
-      b.vx += (fx / b.mass) * dt;
-      b.vy += (fy / b.mass) * dt;
-      a.vx -= (fx / a.mass) * dt;
-      a.vy -= (fy / a.mass) * dt;
+    const torqueSign = vSlide > 0.001 ? 1 : vSlide < -0.001 ? -1 : 0;
+    const torqueMag = ftMag;
 
-      // Torques from tangential friction
-      // τ = sign(v_slide) · |F_t| · R  (opposes sliding at contact)
-      const torqueSign = vSlide > 0.001 ? 1 : vSlide < -0.001 ? -1 : 0;
-      const torqueMag = ftMag;
+    a.omega += (torqueSign * torqueMag * a.radius / a.inertia) * dt;
+    b.omega += (torqueSign * torqueMag * b.radius / b.inertia) * dt;
 
-      a.omega += (torqueSign * torqueMag * a.radius / a.inertia) * dt;
-      b.omega += (torqueSign * torqueMag * b.radius / b.inertia) * dt;
+    const omegaRel = b.omega - a.omega;
+    if (Math.abs(omegaRel) > 0.01) {
+      const tauRoll = MU_ROLL_PP * rEff * fn;
+      const rollSign = omegaRel > 0 ? 1 : -1;
+      const rollImpulse = Math.min(tauRoll * dt, Math.abs(omegaRel) * 0.5 * (a.inertia * b.inertia) / (a.inertia + b.inertia));
+      a.omega += rollSign * rollImpulse / a.inertia;
+      b.omega -= rollSign * rollImpulse / b.inertia;
+    }
 
-      // Rolling friction (CDT): τ_roll = −μ_r · R* · F_n · sign(ω_rel)
-      const omegaRel = b.omega - a.omega;
-      if (Math.abs(omegaRel) > 0.01) {
-        const tauRoll = MU_ROLL_PP * rEff * fn;
-        const rollSign = omegaRel > 0 ? 1 : -1;
-        const rollImpulse = Math.min(tauRoll * dt, Math.abs(omegaRel) * 0.5 * (a.inertia * b.inertia) / (a.inertia + b.inertia));
-        a.omega += rollSign * rollImpulse / a.inertia;
-        b.omega -= rollSign * rollImpulse / b.inertia;
-      }
+    const totalM = a.mass + b.mass;
+    const corr = delta * 0.2;
+    a.x -= nx * corr * (b.mass / totalM);
+    a.y -= ny * corr * (b.mass / totalM);
+    b.x += nx * corr * (a.mass / totalM);
+    b.y += ny * corr * (a.mass / totalM);
 
-      // Position correction (20%, conservative)
-      const totalM = a.mass + b.mass;
-      const corr = delta * 0.2;
-      a.x -= nx * corr * (b.mass / totalM);
-      a.y -= ny * corr * (b.mass / totalM);
-      b.x += nx * corr * (a.mass / totalM);
-      b.y += ny * corr * (a.mass / totalM);
+    const fMag = Math.sqrt(fx * fx + fy * fy);
+    newContactVis.push({
+      x: (a.x * b.radius + b.x * a.radius) / (a.radius + b.radius),
+      y: (a.y * b.radius + b.y * a.radius) / (a.radius + b.radius),
+      force: fMag,
+    });
 
-      // Visualization
-      const fMag = Math.sqrt(fx * fx + fy * fy);
-      newContactVis.push({
-        x: (a.x * b.radius + b.x * a.radius) / (a.radius + b.radius),
-        y: (a.y * b.radius + b.y * a.radius) / (a.radius + b.radius),
-        force: fMag,
-      });
-
-      // Merge detection
-      const key = pairKey(a.id, b.id);
-      newPairs.add(key);
-      if (!contactedPairs.has(key) && a.level === b.level) {
-        mergeQueue.push([a.id, b.id]);
-      }
+    const key = pairKey(a.id, b.id);
+    newPairs.add(key);
+    if (!contactedPairs.has(key) && a.level === b.level) {
+      mergeQueue.push([a.id, b.id]);
     }
   }
 
-  // --- Wall contacts (NBR rubber) ---
+  // Wall contacts
   for (const p of particles) {
-    // Bottom wall: outward normal n=(0,-1), v_n = −vy
+    // Bottom
     const oBot = p.y + p.radius - CB;
     if (oBot > 0) {
       const d = Math.min(oBot, MAX_DELTA_RATIO * p.radius);
       const vn = -p.vy;
       const fn = computeNormalForce(d, p.radius, p.mass, vn, ESTAR_PW, KN_PW, BETA_PW);
       p.vy -= (fn / p.mass) * dt;
-
-      // Wall friction: v_slide at contact = vx − ω·R
-      // r_cp = (0, R), v_cp = (vx−ωR, vy), tangent t=(1,0)
       const vSlideBot = p.vx - p.omega * p.radius;
       if (Math.abs(vSlideBot) > 0.01) {
         const kTEffW = contactModel === 'hertz'
@@ -462,26 +420,21 @@ function physicsStep(dt: number) {
         p.vx -= Math.sign(vSlideBot) * (ft / p.mass) * dt;
         p.omega += Math.sign(vSlideBot) * (ft * p.radius / p.inertia) * dt;
       }
-
-      // Wall rolling friction
       if (Math.abs(p.omega) > 0.01) {
         const tauR = MU_ROLL_PW * p.radius * fn;
         const imp = Math.min(tauR * dt, Math.abs(p.omega) * p.inertia * 0.5);
         p.omega -= Math.sign(p.omega) * imp / p.inertia;
       }
-
       p.y = Math.min(p.y, CB - p.radius);
     }
 
-    // Left wall: n=(1,0), v_n = vx
+    // Left
     const oL = CL - (p.x - p.radius);
     if (oL > 0) {
       const d = Math.min(oL, MAX_DELTA_RATIO * p.radius);
       const vn = p.vx;
       const fn = computeNormalForce(d, p.radius, p.mass, vn, ESTAR_PW, KN_PW, BETA_PW);
       p.vx += (fn / p.mass) * dt;
-      // Wall friction: v_slide at contact = vy − ω·R
-      // r_cp = (−R, 0), v_cp = (vx, vy−ωR), tangent t=(0,1)
       const vSlideL = p.vy - p.omega * p.radius;
       if (Math.abs(vSlideL) > 0.01) {
         const kTEffW = contactModel === 'hertz'
@@ -500,15 +453,13 @@ function physicsStep(dt: number) {
       p.x = Math.max(p.x, CL + p.radius);
     }
 
-    // Right wall: n=(−1,0), v_n = −vx
+    // Right
     const oR = (p.x + p.radius) - CR;
     if (oR > 0) {
       const d = Math.min(oR, MAX_DELTA_RATIO * p.radius);
       const vn = -p.vx;
       const fn = computeNormalForce(d, p.radius, p.mass, vn, ESTAR_PW, KN_PW, BETA_PW);
       p.vx -= (fn / p.mass) * dt;
-      // Wall friction: v_slide at contact = vy + ω·R
-      // r_cp = (R, 0), v_cp = (vx, vy+ωR), tangent t=(0,1)
       const vSlideR = p.vy + p.omega * p.radius;
       if (Math.abs(vSlideR) > 0.01) {
         const kTEffW = contactModel === 'hertz'
@@ -528,7 +479,7 @@ function physicsStep(dt: number) {
     }
   }
 
-  // --- Integration + damping + clamping ---
+  // Integration + damping
   for (const p of particles) {
     p.vx *= VEL_DAMP;
     p.vy *= VEL_DAMP;
@@ -542,7 +493,6 @@ function physicsStep(dt: number) {
     p.y += p.vy * dt;
     p.angle += p.omega * dt;
 
-    // Mark as active once center passes below DANGER_Y
     if (!p.active && p.y > DANGER_Y) {
       p.active = true;
     }
@@ -555,13 +505,6 @@ function physicsStep(dt: number) {
 // ================================================================
 // Game Over Logic
 // ================================================================
-// Condition 1: active particle (past grace) whose CENTER is above DL
-//   → settled particle has stacked past the danger line
-// Condition 2: inactive particle (still falling) above DL touching
-//   another particle
-//   → newly dropped particle hit the pile before entering
-// Checked AFTER processMerges so merged particles are evaluated
-// as their new (larger) selves, not as the original pair.
 
 function doGameOver() {
   gameOver = true;
@@ -577,14 +520,7 @@ function doGameOver() {
 function checkGameOver() {
   for (const p of particles) {
     if (p.graceFrames > 0) continue;
-
-    // Condition 1: active particle with center above danger line
-    if (p.active && p.y < DANGER_Y) {
-      doGameOver();
-      return;
-    }
-
-    // Condition 2: inactive particle above danger line touching another
+    if (p.active && p.y < DANGER_Y) { doGameOver(); return; }
     if (!p.active && p.y < DANGER_Y) {
       for (const q of particles) {
         if (p === q) continue;
@@ -592,10 +528,7 @@ function checkGameOver() {
         const dy = q.y - p.y;
         const distSq = dx * dx + dy * dy;
         const minDist = p.radius + q.radius;
-        if (distSq < minDist * minDist) {
-          doGameOver();
-          return;
-        }
+        if (distSq < minDist * minDist) { doGameOver(); return; }
       }
     }
   }
@@ -607,6 +540,7 @@ function checkGameOver() {
 
 function processMerges() {
   const consumed = new Set<number>();
+  let mergedAny = false;
 
   for (const [idA, idB] of mergeQueue) {
     if (consumed.has(idA) || consumed.has(idB)) continue;
@@ -622,6 +556,8 @@ function processMerges() {
     consumed.add(idA);
     consumed.add(idB);
     particles = particles.filter(p => p.id !== idA && p.id !== idB);
+
+    mergedAny = true;
 
     if (newLevel >= LEVELS.length) {
       const pts = LEVELS[a.level].score * 5;
@@ -663,6 +599,10 @@ function processMerges() {
     comboTimer--;
     if (comboTimer === 0) comboCount = 0;
   }
+
+  if (mergedAny || particles.length > 0) {
+    chartDirty = true;
+  }
 }
 
 // ================================================================
@@ -679,17 +619,16 @@ function getRandomLevel(): number {
 
 function drop() {
   if (!canDrop || gameOver) return;
-
   const r = LEVELS[currentLevel].radius;
   const cx = Math.max(CL + r + 2, Math.min(CR - r - 2, dropX));
   const p = createParticle(cx, DROP_Y, currentLevel);
   particles.push(p);
-
   canDrop = false;
   currentLevel = nextLevel;
   nextLevel = getRandomLevel();
   updateNextPreview();
   setTimeout(() => { if (!gameOver) canDrop = true; }, 500);
+  chartDirty = true;
 }
 
 function restart() {
@@ -707,7 +646,6 @@ function restart() {
   dropX = GAME_W / 2;
   canDrop = true;
   gameOver = false;
-  dangerTimer = 0;
   comboCount = 0;
   comboTimer = 0;
   mergeCount = 0;
@@ -717,177 +655,89 @@ function restart() {
   highScore = loadHighScore();
   highScoreEl.textContent = `今日のハイスコア: ${highScore}`;
   updateNextPreview();
+  chartDirty = true;
 }
 
 // ================================================================
-// Rendering
+// Canvas2D Rendering (optimized fallback)
 // ================================================================
-
-function mulberry32(seed: number): () => number {
-  let s = seed | 0;
-  return () => {
-    s = (s + 0x6D2B79F5) | 0;
-    let t = Math.imul(s ^ (s >>> 15), 1 | s);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
-function hexToRGBA(hex: string, alpha: number): string {
-  const n = parseInt(hex.slice(1), 16);
-  return `rgba(${(n >> 16) & 0xFF},${(n >> 8) & 0xFF},${n & 0xFF},${alpha})`;
-}
-
-function lighten(hex: string, amt: number): string {
-  const n = parseInt(hex.slice(1), 16);
-  const r = Math.min(255, ((n >> 16) & 0xFF) + amt);
-  const g = Math.min(255, ((n >> 8) & 0xFF) + amt);
-  const b = Math.min(255, (n & 0xFF) + amt);
-  return `#${((r << 16) | (g << 8) | b).toString(16).padStart(6, '0')}`;
-}
-
-function drawParticle(ctx: CanvasRenderingContext2D, x: number, y: number, angle: number, level: number) {
-  const info = LEVELS[level];
-  const r = info.radius;
-
-  ctx.save();
-  ctx.translate(x, y);
-  ctx.rotate(angle);
-
-  ctx.beginPath();
-  ctx.arc(2, 3, r, 0, Math.PI * 2);
-  ctx.fillStyle = 'rgba(0,0,0,0.15)';
-  ctx.fill();
-
-  const grad = ctx.createRadialGradient(-r * 0.25, -r * 0.25, r * 0.05, 0, 0, r);
-  grad.addColorStop(0, lighten(info.color, 35));
-  grad.addColorStop(1, info.color);
-  ctx.beginPath();
-  ctx.arc(0, 0, r, 0, Math.PI * 2);
-  ctx.fillStyle = grad;
-  ctx.fill();
-  ctx.strokeStyle = info.strokeColor;
-  ctx.lineWidth = 2;
-  ctx.stroke();
-
-  const rng = mulberry32(level * 54321 + 7);
-  const dotN = Math.min(level * 4 + 3, 18);
-  for (let i = 0; i < dotN; i++) {
-    const ddx = (rng() - 0.5) * r * 1.4;
-    const ddy = (rng() - 0.5) * r * 1.4;
-    if (ddx * ddx + ddy * ddy < (r * 0.7) ** 2) {
-      ctx.beginPath();
-      ctx.arc(ddx, ddy, Math.max(1, r * 0.05), 0, Math.PI * 2);
-      ctx.fillStyle = hexToRGBA(info.strokeColor, 0.3);
-      ctx.fill();
-    }
-  }
-
-  const fontSize = Math.max(8, Math.floor(r * 0.3));
-  ctx.font = `bold ${fontSize}px sans-serif`;
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillStyle = '#3E2723';
-  ctx.fillText(info.sieve, 0, 0);
-
-  ctx.restore();
-}
 
 let dangerTimer = 0;
 
-function drawGame() {
+function drawGameCanvas2D() {
   const ctx = gCtx;
+  ctx.clearRect(0, 0, GAME_W, GAME_H);
 
+  // Background
   ctx.fillStyle = '#0f0f23';
   ctx.fillRect(0, 0, GAME_W, GAME_H);
-
   const bgGrad = ctx.createLinearGradient(0, 0, 0, GAME_H);
   bgGrad.addColorStop(0, '#151530');
   bgGrad.addColorStop(1, '#0d0d20');
   ctx.fillStyle = bgGrad;
   ctx.fillRect(CL, 0, CONTAINER_W, GAME_H);
-
   ctx.fillStyle = '#1e1e45';
   ctx.fillRect(0, 0, WALL_T, GAME_H);
   ctx.fillRect(CR, 0, WALL_T, GAME_H);
   ctx.fillRect(0, CB, GAME_W, WALL_T);
-
   ctx.strokeStyle = '#3a3a7a';
   ctx.lineWidth = 2;
   ctx.beginPath();
-  ctx.moveTo(CL, 0);
-  ctx.lineTo(CL, CB);
-  ctx.lineTo(CR, CB);
-  ctx.lineTo(CR, 0);
+  ctx.moveTo(CL, 0); ctx.lineTo(CL, CB); ctx.lineTo(CR, CB); ctx.lineTo(CR, 0);
   ctx.stroke();
 
+  // Danger line
   const dAlpha = dangerTimer > 0 ? 0.7 + 0.3 * Math.abs(Math.sin(Date.now() / 130)) : 0.6;
   ctx.strokeStyle = `rgba(255,160,0,${dAlpha})`;
   ctx.lineWidth = 5;
   ctx.setLineDash([12, 6]);
   ctx.beginPath();
-  ctx.moveTo(CL, DANGER_Y);
-  ctx.lineTo(CR, DANGER_Y);
+  ctx.moveTo(CL, DANGER_Y); ctx.lineTo(CR, DANGER_Y);
   ctx.stroke();
   ctx.setLineDash([]);
-
   ctx.fillStyle = `rgba(255,160,0,${dAlpha * 0.8})`;
   ctx.font = '9px sans-serif';
   ctx.textAlign = 'right';
   ctx.fillText('DEAD LINE', CR - 4, DANGER_Y - 4);
 
+  // Force chains (optimized, no shadowBlur)
   if (showForceChains && contactVis.length > 0) {
     const maxF = Math.max(...contactVis.map(c => c.force), 1);
     for (const c of contactVis) {
       const t = Math.min(c.force / maxF, 1);
       const baseR = 8 + t * 24;
-      const coreR = baseR * 0.3;
-      const midR = baseR * 0.6;
-      ctx.save();
-      ctx.shadowColor = t > 0.5
-        ? `rgba(255,${Math.floor(60 * (1 - t))},0,0.9)`
-        : `rgba(255,255,0,0.7)`;
-      ctx.shadowBlur = 12 + t * 18;
       const grad = ctx.createRadialGradient(c.x, c.y, 0, c.x, c.y, baseR);
-      grad.addColorStop(0, `rgba(255,255,${Math.floor(220 * (1 - t))},1)`);
-      grad.addColorStop(0.2, `rgba(255,${Math.floor(255 * (1 - t * 0.8))},${Math.floor(50 * (1 - t))},${0.95 - t * 0.15})`);
-      grad.addColorStop(0.5, `rgba(${Math.floor(255 - 40 * t)},${Math.floor(80 * (1 - t))},0,${0.6 + t * 0.2})`);
-      grad.addColorStop(1, `rgba(${Math.floor(180 * t)},0,0,0)`);
+      grad.addColorStop(0, `rgba(255,255,${Math.floor(220*(1-t))},1)`);
+      grad.addColorStop(0.5, `rgba(255,${Math.floor(255*(1-t*0.8))},${Math.floor(50*(1-t))},${0.6+t*0.2})`);
+      grad.addColorStop(1, `rgba(${Math.floor(255-40*t)},${Math.floor(80*(1-t))},0,0)`);
       ctx.fillStyle = grad;
       ctx.beginPath();
       ctx.arc(c.x, c.y, baseR, 0, Math.PI * 2);
       ctx.fill();
-      ctx.strokeStyle = `rgba(255,255,200,${0.5 + t * 0.5})`;
+      ctx.strokeStyle = `rgba(255,255,200,${0.5+t*0.5})`;
       ctx.lineWidth = 2 + t * 3;
       ctx.beginPath();
-      ctx.arc(c.x, c.y, coreR, 0, Math.PI * 2);
+      ctx.arc(c.x, c.y, baseR * 0.3, 0, Math.PI * 2);
       ctx.stroke();
-      ctx.strokeStyle = `rgba(255,255,100,${0.3 + t * 0.4})`;
-      ctx.lineWidth = 1 + t * 2;
-      ctx.beginPath();
-      ctx.arc(c.x, c.y, midR, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.restore();
     }
   }
 
+  // Effects
   for (const e of effects) {
     ctx.beginPath();
     ctx.arc(e.x, e.y, e.r, 0, Math.PI * 2);
     ctx.strokeStyle = hexToRGBA(e.color, e.alpha);
     ctx.lineWidth = 3;
     ctx.stroke();
-    ctx.beginPath();
-    ctx.arc(e.x, e.y, e.r * 0.5, 0, Math.PI * 2);
-    ctx.strokeStyle = `rgba(255,255,255,${e.alpha * 0.5})`;
-    ctx.lineWidth = 1.5;
-    ctx.stroke();
   }
 
+  // Particles (cached)
+  initParticleCache();
   for (const p of particles) {
-    drawParticle(ctx, p.x, p.y, p.angle, p.level);
+    drawParticleCached(ctx, p.x, p.y, p.angle, p.level);
   }
 
+  // Score popups
   for (const sp of scorePopups) {
     const alpha = sp.timer / 60;
     const sz = 14 + (1 - alpha) * 8;
@@ -901,6 +751,7 @@ function drawGame() {
     ctx.fillText(sp.text, sp.x, sp.y - 30 + (1 - alpha) * 20);
   }
 
+  // Combo
   if (comboCount > 1 && comboTimer > 0) {
     const alpha = comboTimer / 45;
     const sz = 22 + comboCount * 2;
@@ -914,6 +765,7 @@ function drawGame() {
     ctx.fillText(`${comboCount} COMBO!`, GAME_W / 2, GAME_H / 2 - 60);
   }
 
+  // Drop preview
   if (!gameOver && canDrop) {
     const r = LEVELS[currentLevel].radius;
     const cx = Math.max(CL + r + 2, Math.min(CR - r - 2, dropX));
@@ -925,18 +777,19 @@ function drawGame() {
     ctx.lineTo(cx, CB);
     ctx.stroke();
     ctx.setLineDash([]);
-    drawParticle(ctx, cx, DROP_Y, 0, currentLevel);
+    drawParticleCached(ctx, cx, DROP_Y, 0, currentLevel);
   }
 
-  ctx.fillStyle = 'rgba(255,255,255,0.4)';
+  // Status line
   ctx.font = '9px sans-serif';
   ctx.textAlign = 'left';
-  ctx.fillText(contactModel === 'hertz' ? 'Hertz Contact' : 'Hooke Contact', CL + 4, 14);
-  ctx.fillText(`N=${particles.length}`, CL + 4, 26);
+  ctx.fillStyle = 'rgba(255,255,255,0.4)';
+  const modelText = contactModel === 'hertz' ? 'Hertz Contact' : 'Hooke Contact';
+  ctx.fillText(`${modelText}  N=${particles.length}  ${rendererName}`, CL + 4, 14);
 }
 
 // ================================================================
-// Grading Chart
+// Grading Chart (throttled)
 // ================================================================
 
 function drawGradingChart() {
@@ -969,9 +822,9 @@ function drawGradingChart() {
   ctx.font = '13px sans-serif';
   ctx.textAlign = 'right';
   ctx.textBaseline = 'middle';
-  for (const p of [0, 20, 40, 60, 80, 100]) {
-    const y = pad.top + pH - (p / 100) * pH;
-    ctx.fillText(`${p}`, pad.left - 4, y);
+  for (const pct of [0, 20, 40, 60, 80, 100]) {
+    const y = pad.top + pH - (pct / 100) * pH;
+    ctx.fillText(`${pct}`, pad.left - 4, y);
     ctx.strokeStyle = '#ddd';
     ctx.lineWidth = 0.5;
     ctx.beginPath();
@@ -1047,8 +900,7 @@ function drawGradingChart() {
   for (let i = 0; i < points.length; i++) {
     const px = toX(points[i].x);
     const py = pad.top + pH - (points[i].y / 100) * pH;
-    if (i === 0) ctx.moveTo(px, py);
-    else ctx.lineTo(px, py);
+    if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
   }
   ctx.stroke();
 
@@ -1057,8 +909,7 @@ function drawGradingChart() {
   for (let i = 0; i < points.length; i++) {
     const px = toX(points[i].x);
     const py = pad.top + pH - (points[i].y / 100) * pH;
-    if (i === 0) ctx.moveTo(px, py);
-    else ctx.lineTo(px, py);
+    if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
   }
   ctx.lineTo(pad.left + pW, pad.top + pH);
   ctx.lineTo(pad.left, pad.top + pH);
@@ -1095,12 +946,10 @@ function drawGradingChart() {
     ctx.lineWidth = 1.5;
     ctx.globalAlpha = 0.65;
     ctx.beginPath();
-    ctx.moveTo(hx, pad.top + pH);
-    ctx.lineTo(hx, hy);
+    ctx.moveTo(hx, pad.top + pH); ctx.lineTo(hx, hy);
     ctx.stroke();
     ctx.beginPath();
-    ctx.moveTo(pad.left, hy);
-    ctx.lineTo(hx, hy);
+    ctx.moveTo(pad.left, hy); ctx.lineTo(hx, hy);
     ctx.stroke();
     ctx.globalAlpha = 1;
     ctx.setLineDash([]);
@@ -1131,13 +980,9 @@ function drawGradingChart() {
   if (d10 !== null && d30 !== null && d60 !== null) {
     const Uc = d60 / d10;
     const Ucp = (d30 * d30) / (d10 * d60);
-    if (Uc >= 4 && Ucp >= 1 && Ucp <= 3) {
-      txt += '良粒度礫 (GW)';
-    } else if (Uc >= 6 && Ucp >= 1 && Ucp <= 3) {
-      txt += '良粒度砂 (SW)';
-    } else {
-      txt += '不良粒度 (GP/SP)';
-    }
+    if (Uc >= 4 && Ucp >= 1 && Ucp <= 3) txt += '良粒度礫 (GW)';
+    else if (Uc >= 6 && Ucp >= 1 && Ucp <= 3) txt += '良粒度砂 (SW)';
+    else txt += '不良粒度 (GP/SP)';
   } else {
     txt += '----';
   }
@@ -1191,9 +1036,28 @@ function updateNextPreview() {
   ctx.save();
   ctx.translate(s / 2, s / 2);
   ctx.scale(sc, sc);
-  drawParticle(ctx, 0, 0, 0, nextLevel);
+
+  const info = LEVELS[nextLevel];
+  const grad = ctx.createRadialGradient(-r * 0.25, -r * 0.25, r * 0.05, 0, 0, r);
+  grad.addColorStop(0, lighten(info.color, 35));
+  grad.addColorStop(1, info.color);
+  ctx.beginPath();
+  ctx.arc(0, 0, r, 0, Math.PI * 2);
+  ctx.fillStyle = grad;
+  ctx.fill();
+  ctx.strokeStyle = info.strokeColor;
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  const fontSize = Math.max(8, Math.floor(r * 0.3));
+  ctx.font = `bold ${fontSize}px sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#3E2723';
+  ctx.fillText(info.sieve, 0, 0);
+
   ctx.restore();
-  nextNameEl.textContent = `${LEVELS[nextLevel].name} (${LEVELS[nextLevel].sieve})`;
+  nextNameEl.textContent = `${info.name} (${info.sieve})`;
 }
 
 // ================================================================
@@ -1232,9 +1096,7 @@ function setupInput() {
   }, 16);
 
   restartBtn.addEventListener('click', restart);
-
-  const scoreRestartBtn = document.getElementById('score-restart-btn')!;
-  scoreRestartBtn.addEventListener('click', restart);
+  document.getElementById('score-restart-btn')!.addEventListener('click', restart);
 
   btnHooke.addEventListener('click', () => {
     contactModel = 'hooke';
@@ -1275,8 +1137,28 @@ function update() {
   for (const sp of scorePopups) sp.timer--;
   scorePopups = scorePopups.filter(sp => sp.timer > 0);
 
-  drawGame();
-  drawGradingChart();
+  // Render
+  if (gpuRenderer) {
+    gpuRenderer.drawFrame(
+      particles, contactVis, effects, scorePopups,
+      comboCount, comboTimer, currentLevel, dropX, canDrop, gameOver,
+      contactModel, showForceChains,
+      dangerTimer > 0 ? 0.7 + 0.3 * Math.abs(Math.sin(Date.now() / 130)) : 0.6,
+      Date.now() / 1000,
+      rendererName,
+    );
+  } else {
+    drawGameCanvas2D();
+  }
+
+  // Chart (throttled)
+  if (chartDirty || (Date.now() - lastChartFrame > 500)) {
+    drawGradingChart();
+    chartDirty = false;
+    lastChartFrame = Date.now();
+  }
+
+  if (gameOver && dangerTimer > 0) dangerTimer--;
 
   requestAnimationFrame(update);
 }
@@ -1285,11 +1167,16 @@ function update() {
 // Init
 // ================================================================
 
-currentLevel = getRandomLevel();
-nextLevel = getRandomLevel();
-updateNextPreview();
-setupInput();
-update();
+async function main() {
+  await initRenderer();
+  currentLevel = getRandomLevel();
+  nextLevel = getRandomLevel();
+  updateNextPreview();
+  setupInput();
+  update();
+}
+
+main().catch(console.error);
 
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('sw.js').catch(() => {});
