@@ -1022,7 +1022,7 @@ function drawGradingChart() {
     ctx.font = '14px sans-serif';
     ctx.textAlign = 'center';
     ctx.fillText('粒子を落としてください', W / 2, H / 2);
-    paramsEl.innerHTML = 'D\u2081\u2080=--mm  D\u2083\u2080=--mm  D\u2085\u2080=--mm  D\u2086\u2080=--mm  Uc=--  Uc\'=--<br>土の種類: --';
+    paramsEl.innerHTML = 'D\u2081\u2080=--  D\u2083\u2080=--  D\u2085\u2080=--  D\u2086\u2080=--  Uc=--  Uc\'=--<br>土の種類: ----';
     return;
   }
 
@@ -1112,28 +1112,34 @@ function drawGradingChart() {
 
   let txt = '';
   if (d10 !== null) txt += `D\u2081\u2080=${d10.toFixed(1)}mm  `;
+  else txt += 'D\u2081\u2080=--  ';
   if (d30 !== null) txt += `D\u2083\u2080=${d30.toFixed(1)}mm  `;
+  else txt += 'D\u2083\u2080=--  ';
   if (d50 !== null) txt += `D\u2085\u2080=${d50.toFixed(1)}mm  `;
+  else txt += 'D\u2085\u2080=--  ';
   if (d60 !== null) txt += `D\u2086\u2080=${d60.toFixed(1)}mm`;
+  else txt += 'D\u2086\u2080=--';
   if (d10 !== null && d60 !== null) {
     const Uc = d60 / d10;
     txt += `  Uc=${Uc.toFixed(2)}`;
     if (d30 !== null) {
       const Ucp = (d30 * d30) / (d10 * d60);
       txt += `  Uc'=${Ucp.toFixed(2)}`;
-      txt += '<br>土の種類: ';
-      if (Uc >= 4 && Ucp >= 1 && Ucp <= 3) {
-        txt += '良粒度礫 (GW)';
-      } else if (Uc >= 6 && Ucp >= 1 && Ucp <= 3) {
-        txt += '良粒度砂 (SW)';
-      } else {
-        txt += '不良粒度 (GP/SP)';
-      }
+    } else txt += "  Uc'=--";
+  } else txt += '  Uc=--  Uc\'=--';
+  txt += '<br>土の種類: ';
+  if (d10 !== null && d30 !== null && d60 !== null) {
+    const Uc = d60 / d10;
+    const Ucp = (d30 * d30) / (d10 * d60);
+    if (Uc >= 4 && Ucp >= 1 && Ucp <= 3) {
+      txt += '良粒度礫 (GW)';
+    } else if (Uc >= 6 && Ucp >= 1 && Ucp <= 3) {
+      txt += '良粒度砂 (SW)';
     } else {
-      txt += '<br>土の種類: --';
+      txt += '不良粒度 (GP/SP)';
     }
   } else {
-    txt += '<br>土の種類: --';
+    txt += '----';
   }
   for (const dl of dLines) {
     if (dl.d === null) continue;
