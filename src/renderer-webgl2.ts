@@ -158,7 +158,7 @@ void main() {
     float dy = hash(seed + 1.0) * 2.0 - 1.0;
     float inside = hash2(seed + 2.0);
     if (dx*dx + dy*dy < 0.55 && inside < 0.85) {
-      float dotR = 0.015 + hash2(seed + 3.0) * 0.05;
+        float dotR = 0.035 + hash2(seed + 3.0) * 0.065;
       float d = length(v_uv - vec2(dx * 0.75, dy * 0.75));
       if (d < dotR) {
         float intensity = 0.15 + hash2(seed + 4.0) * 0.35;

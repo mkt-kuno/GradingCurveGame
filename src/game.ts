@@ -226,7 +226,7 @@ function initParticleCache() {
       const ddy = (rng() - 0.5) * r * 1.5;
       const inside = rng();
       if (ddx * ddx + ddy * ddy < (r * 0.75) ** 2 && inside < 0.85) {
-        const dotR = (0.015 + rng() * 0.05) * r;
+        const dotR = (0.035 + rng() * 0.065) * r;
         const alpha = 0.15 + rng() * 0.35;
         const gray = 0.3 + rng() * 0.4;
         const sc = info.strokeColor;
