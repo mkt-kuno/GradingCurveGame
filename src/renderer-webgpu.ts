@@ -282,18 +282,20 @@ export class WebGPURenderer {
     }
 
     // Text for all particles
-    for (const p of particles) {
-      const info = LEVELS[p.level];
-      const fontSize = Math.max(8, Math.floor(p.radius * 0.3));
-      ctx.save();
-      ctx.translate(p.x, p.y);
-      ctx.rotate(p.angle);
-      ctx.font = `bold ${fontSize}px sans-serif`;
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillStyle = '#3E2723';
-      ctx.fillText(info.sieve, 0, 0);
-      ctx.restore();
+    if (!gameOver) {
+      for (const p of particles) {
+        const info = LEVELS[p.level];
+        const fontSize = Math.max(8, Math.floor(p.radius * 0.3));
+        ctx.save();
+        ctx.translate(p.x, p.y);
+        ctx.rotate(p.angle);
+        ctx.font = `bold ${fontSize}px sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillStyle = '#3E2723';
+        ctx.fillText(info.sieve, 0, 0);
+        ctx.restore();
+      }
     }
 
     // Preview particle text
