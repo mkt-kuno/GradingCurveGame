@@ -150,15 +150,15 @@ void main() {
   float t = smoothstep(0.05, 1.0, ld);
   vec3 gc = mix(lightC, v_color, t);
   int li = int(v_level + 0.5);
-  int dc = min(li * 10 + 12, 80);
-  for (int i = 0; i < 80; i++) {
+  int dc = min(li * 20 + 24, 160);
+  for (int i = 0; i < 160; i++) {
     if (i >= dc) break;
     float seed = v_level * 54321.0 + 7.0 + float(i) * 1337.0;
     float dx = hash(seed) * 2.0 - 1.0;
     float dy = hash(seed + 1.0) * 2.0 - 1.0;
     float inside = hash2(seed + 2.0);
-    if (dx*dx + dy*dy < 0.55 && inside < 0.85) {
-        float dotR = 0.035 + hash2(seed + 3.0) * 0.065;
+    if (dx*dx + dy*dy < 0.55 && inside < 0.95) {
+      float dotR = 0.05 + hash2(seed + 3.0) * 0.10;
       float d = length(v_uv - vec2(dx * 0.75, dy * 0.75));
       if (d < dotR) {
         float intensity = 0.15 + hash2(seed + 4.0) * 0.35;

@@ -72,15 +72,15 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
   let t = smoothstep(0.05, 1.0, ld);
   var gc = mix(lightC, in.color, t);
   let li = i32(in.level + 0.5);
-  let dc = min(li * 10 + 12, 80);
-  for (var i = 0; i < 80; i++) {
+  let dc = min(li * 20 + 24, 160);
+  for (var i = 0; i < 160; i++) {
     if (i >= dc) { break; }
     let seed = in.level * 54321.0 + 7.0 + f32(i) * 1337.0;
     let dx = hash(seed) * 2.0 - 1.0;
     let dy = hash(seed + 1.0) * 2.0 - 1.0;
     let inside = hash2(seed + 2.0);
-    if (dx*dx + dy*dy < 0.55 && inside < 0.85) {
-        let dotR = 0.035 + hash2(seed + 3.0) * 0.065;
+    if (dx*dx + dy*dy < 0.55 && inside < 0.95) {
+      let dotR = 0.05 + hash2(seed + 3.0) * 0.10;
       let d = length(in.uv - vec2<f32>(dx * 0.75, dy * 0.75));
       if (d < dotR) {
         let intensity = 0.15 + hash2(seed + 4.0) * 0.35;

@@ -220,13 +220,13 @@ function initParticleCache() {
 
     // Dots — sand-like irregular bumps with varied size, intensity, and grayscale
     const rng = mulberry32(level * 54321 + 7);
-    const dotN = Math.min(level * 10 + 12, 80);
+    const dotN = Math.min(level * 20 + 24, 160);
     for (let i = 0; i < dotN; i++) {
       const ddx = (rng() - 0.5) * r * 1.5;
       const ddy = (rng() - 0.5) * r * 1.5;
       const inside = rng();
-      if (ddx * ddx + ddy * ddy < (r * 0.75) ** 2 && inside < 0.85) {
-        const dotR = (0.035 + rng() * 0.065) * r;
+      if (ddx * ddx + ddy * ddy < (r * 0.75) ** 2 && inside < 0.95) {
+        const dotR = (0.05 + rng() * 0.10) * r;
         const alpha = 0.15 + rng() * 0.35;
         const gray = 0.3 + rng() * 0.4;
         const sc = info.strokeColor;
