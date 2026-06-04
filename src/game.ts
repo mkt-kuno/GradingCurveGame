@@ -1104,18 +1104,6 @@ function drawGradingChart() {
     ctx.stroke();
     ctx.globalAlpha = 1;
     ctx.setLineDash([]);
-    ctx.font = 'bold 14px sans-serif';
-    ctx.textAlign = 'left';
-    ctx.textBaseline = 'bottom';
-    ctx.strokeStyle = '#ffffff';
-    ctx.lineWidth = 4;
-    ctx.lineJoin = 'round';
-    ctx.miterLimit = 2;
-    ctx.strokeText(dl.label, hx + 4, hy - 3);
-    ctx.strokeText(dl.label, hx + 4, hy - 3);
-    ctx.fillStyle = dl.color;
-    ctx.fillText(dl.label, hx + 4, hy - 3);
-    ctx.textBaseline = 'alphabetic';
     ctx.beginPath();
     ctx.arc(hx, hy, 4, 0, Math.PI * 2);
     ctx.fillStyle = dl.color;
@@ -1142,6 +1130,24 @@ function drawGradingChart() {
       }
     }
   }
+  for (const dl of dLines) {
+    if (dl.d === null) continue;
+    const hx = toX(dl.d);
+    const hy = pad.top + pH - (dl.pct / 100) * pH;
+    ctx.font = 'bold 14px sans-serif';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'bottom';
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 4;
+    ctx.lineJoin = 'round';
+    ctx.miterLimit = 2;
+    ctx.strokeText(dl.label, hx + 4, hy - 3);
+    ctx.strokeText(dl.label, hx + 4, hy - 3);
+    ctx.fillStyle = dl.color;
+    ctx.fillText(dl.label, hx + 4, hy - 3);
+    ctx.textBaseline = 'alphabetic';
+  }
+
   paramsEl.textContent = txt;
 }
 
