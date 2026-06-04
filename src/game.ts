@@ -135,7 +135,6 @@ interface Particle {
   angle: number;
   omega: number;                  // angular velocity (rad/s)
   active: boolean;                // true once center has been below DANGER_Y
-  prevY: number;                  // y position from previous frame (for crossing detection)
   graceFrames: number;            // frames of immunity after merge
 }
 
@@ -185,7 +184,7 @@ let contactModel: ContactModel = 'hooke';
 let showForceChains = true;
 let comboCount = 0;
 let comboTimer = 0;
-let pendingGameOver = false;
+
 
 function getTodayKey(): string {
   const d = new Date();
@@ -283,7 +282,6 @@ function createParticle(x: number, y: number, level: number): Particle {
     angle: 0,
     omega: 0,
     active: false,
-    prevY: y,
     graceFrames: 0,
   };
 }
@@ -330,7 +328,6 @@ function computeNormalForce(
 function physicsStep(dt: number) {
   const newContactVis: ContactVis[] = [];
   const newPairs = new Set<string>();
-  pendingGameOver = false;
 
   // --- Gravity ---
   for (const p of particles) {
@@ -439,14 +436,6 @@ function physicsStep(dt: number) {
       newPairs.add(key);
       if (!contactedPairs.has(key) && a.level === b.level) {
         mergeQueue.push([a.id, b.id]);
-      }
-
-      // Game over: falling particle touches another before crossing DL
-      if (!pendingGameOver) {
-        const aAbove = a.y < DANGER_Y;
-        const bAbove = b.y < DANGER_Y;
-        if (!a.active && aAbove) pendingGameOver = true;
-        if (!b.active && bAbove) pendingGameOver = true;
       }
     }
   }
@@ -566,35 +555,48 @@ function physicsStep(dt: number) {
 // ================================================================
 // Game Over Logic
 // ================================================================
-// Condition 1: settled particle (active=true) center rises above DL
-// Condition 2: falling particle touches another before crossing DL
-//   (detected in physicsStep, sets pendingGameOver)
+// Condition 1: active particle (past grace) whose CENTER is above DL
+//   → settled particle has stacked past the danger line
+// Condition 2: inactive particle (still falling) above DL touching
+//   another particle
+//   → newly dropped particle hit the pile before entering
+// Checked AFTER processMerges so merged particles are evaluated
+// as their new (larger) selves, not as the original pair.
+
+function doGameOver() {
+  gameOver = true;
+  finalScoreEl.textContent = score.toString();
+  gameOverEl.style.display = 'flex';
+  if (score > highScore) {
+    highScore = score;
+    saveHighScore(highScore);
+    highScoreEl.textContent = `今日のハイスコア: ${highScore}`;
+  }
+}
 
 function checkGameOver() {
-  if (pendingGameOver) {
-    gameOver = true;
-    finalScoreEl.textContent = score.toString();
-    gameOverEl.style.display = 'flex';
-    if (score > highScore) {
-      highScore = score;
-      saveHighScore(highScore);
-      highScoreEl.textContent = `今日のハイスコア: ${highScore}`;
-    }
-    return;
-  }
-
   for (const p of particles) {
     if (p.graceFrames > 0) continue;
-    if (p.active && p.prevY >= DANGER_Y && p.y < DANGER_Y) {
-      gameOver = true;
-      finalScoreEl.textContent = score.toString();
-      gameOverEl.style.display = 'flex';
-      if (score > highScore) {
-        highScore = score;
-        saveHighScore(highScore);
-        highScoreEl.textContent = `今日のハイスコア: ${highScore}`;
-      }
+
+    // Condition 1: active particle with center above danger line
+    if (p.active && p.y < DANGER_Y) {
+      doGameOver();
       return;
+    }
+
+    // Condition 2: inactive particle above danger line touching another
+    if (!p.active && p.y < DANGER_Y) {
+      for (const q of particles) {
+        if (p === q) continue;
+        const dx = q.x - p.x;
+        const dy = q.y - p.y;
+        const distSq = dx * dx + dy * dy;
+        const minDist = p.radius + q.radius;
+        if (distSq < minDist * minDist) {
+          doGameOver();
+          return;
+        }
+      }
     }
   }
 }
@@ -642,7 +644,6 @@ function processMerges() {
     np.vy = Math.max(avgVy * 0.15, 0);
     np.omega = 0;
     np.active = a.active || b.active;
-    np.prevY = my;
     np.graceFrames = 30;
     particles.push(np);
 
@@ -699,7 +700,6 @@ function restart() {
   mergeQueue = [];
   contactedPairs.clear();
   nextId = 0;
-  pendingGameOver = false;
 
   score = 0;
   currentLevel = getRandomLevel();
@@ -1193,9 +1193,6 @@ function setupInput() {
 
 function update() {
   if (!gameOver) {
-    for (const p of particles) {
-      p.prevY = p.y;
-    }
     const dt = (1 / 60) / SUB_STEPS;
     for (let i = 0; i < SUB_STEPS; i++) {
       physicsStep(dt);
