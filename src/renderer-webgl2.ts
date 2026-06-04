@@ -150,22 +150,15 @@ void main() {
   float t = smoothstep(0.05, 1.0, ld);
   vec3 gc = mix(lightC, v_color, t);
   int li = int(v_level + 0.5);
-  int dc = min(li * 20 + 24, 160);
-  for (int i = 0; i < 160; i++) {
+  int dc = min(li * 6 + 4, 27);
+  for (int i = 0; i < 27; i++) {
     if (i >= dc) break;
     float seed = v_level * 54321.0 + 7.0 + float(i) * 1337.0;
     float dx = hash(seed) * 2.0 - 1.0;
     float dy = hash(seed + 1.0) * 2.0 - 1.0;
-    float inside = hash2(seed + 2.0);
-    if (dx*dx + dy*dy < 0.55 && inside < 0.95) {
-      float dotR = 0.05 + hash2(seed + 3.0) * 0.10;
-      float d = length(v_uv - vec2(dx * 0.75, dy * 0.75));
-      if (d < dotR) {
-        float intensity = 0.15 + hash2(seed + 4.0) * 0.35;
-        float gray = 0.3 + hash2(seed + 5.0) * 0.4;
-        vec3 dotCol = vec3(gray) * v_strokeColor;
-        gc = mix(gc, dotCol, intensity);
-      }
+    if (dx*dx + dy*dy < 0.49) {
+      float d = length(v_uv - vec2(dx * 0.7, dy * 0.7));
+      if (d < 0.05) gc = mix(gc, v_strokeColor * 0.5, 0.3);
     }
   }
   fragColor = vec4(gc, 1.0);
