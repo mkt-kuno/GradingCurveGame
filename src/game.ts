@@ -218,16 +218,25 @@ function initParticleCache() {
     ctx.lineWidth = 2;
     ctx.stroke();
 
-    // Dots
+    // Dots — sand-like irregular bumps with varied size, intensity, and grayscale
     const rng = mulberry32(level * 54321 + 7);
-    const dotN = Math.min(level * 4 + 3, 18);
+    const dotN = Math.min(level * 10 + 12, 80);
     for (let i = 0; i < dotN; i++) {
-      const ddx = (rng() - 0.5) * r * 1.4;
-      const ddy = (rng() - 0.5) * r * 1.4;
-      if (ddx * ddx + ddy * ddy < (r * 0.7) ** 2) {
+      const ddx = (rng() - 0.5) * r * 1.5;
+      const ddy = (rng() - 0.5) * r * 1.5;
+      const inside = rng();
+      if (ddx * ddx + ddy * ddy < (r * 0.75) ** 2 && inside < 0.85) {
+        const dotR = (0.015 + rng() * 0.05) * r;
+        const alpha = 0.15 + rng() * 0.35;
+        const gray = 0.3 + rng() * 0.4;
+        const sc = info.strokeColor;
+        const n = parseInt(sc.slice(1), 16);
+        const sr = ((n >> 16) & 0xFF) * gray;
+        const sg = ((n >> 8) & 0xFF) * gray;
+        const sb = (n & 0xFF) * gray;
         ctx.beginPath();
-        ctx.arc(cx + ddx, cy + ddy, Math.max(1, r * 0.05), 0, Math.PI * 2);
-        ctx.fillStyle = hexToRGBA(info.strokeColor, 0.3);
+        ctx.arc(cx + ddx, cy + ddy, Math.max(0.5, dotR), 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(${Math.floor(sr)},${Math.floor(sg)},${Math.floor(sb)},${alpha})`;
         ctx.fill();
       }
     }

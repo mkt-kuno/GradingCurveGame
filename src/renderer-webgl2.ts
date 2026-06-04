@@ -136,6 +136,7 @@ flat in float v_radius;
 flat in float v_level;
 out vec4 fragColor;
 float hash(float n) { return fract(sin(n) * 43758.5453123); }
+float hash2(float n) { return fract(cos(n * 1.234) * 35791.234); }
 void main() {
   float dist = length(v_uv);
   if (dist > 1.0) discard;
@@ -149,15 +150,22 @@ void main() {
   float t = smoothstep(0.05, 1.0, ld);
   vec3 gc = mix(lightC, v_color, t);
   int li = int(v_level + 0.5);
-  int dc = min(li * 4 + 3, 18);
-  for (int i = 0; i < 18; i++) {
+  int dc = min(li * 10 + 12, 80);
+  for (int i = 0; i < 80; i++) {
     if (i >= dc) break;
     float seed = v_level * 54321.0 + 7.0 + float(i) * 1337.0;
     float dx = hash(seed) * 2.0 - 1.0;
     float dy = hash(seed + 1.0) * 2.0 - 1.0;
-    if (dx*dx + dy*dy < 0.49) {
-      float d = length(v_uv - vec2(dx*0.7, dy*0.7));
-      if (d < 0.05) gc = mix(gc, v_strokeColor * 0.5, 0.3);
+    float inside = hash2(seed + 2.0);
+    if (dx*dx + dy*dy < 0.55 && inside < 0.85) {
+      float dotR = 0.015 + hash2(seed + 3.0) * 0.05;
+      float d = length(v_uv - vec2(dx * 0.75, dy * 0.75));
+      if (d < dotR) {
+        float intensity = 0.15 + hash2(seed + 4.0) * 0.35;
+        float gray = 0.3 + hash2(seed + 5.0) * 0.4;
+        vec3 dotCol = vec3(gray) * v_strokeColor;
+        gc = mix(gc, dotCol, intensity);
+      }
     }
   }
   fragColor = vec4(gc, 1.0);
