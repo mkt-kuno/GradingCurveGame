@@ -1,11 +1,13 @@
-const CACHE = 'grading-game-v3';
+const CACHE = 'grading-game-v4';
 const ASSETS = [
   './',
   './index.html',
   './bgm.opus',
   './dist/game.js',
   './manifest.json',
-  './icons/icon.svg',
+  './icons/icon.png',
+  './icons/icon_256x256.png',
+  './icons/icon_16x16.png',
 ];
 
 self.addEventListener('install', e => {
