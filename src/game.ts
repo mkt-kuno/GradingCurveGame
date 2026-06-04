@@ -1107,9 +1107,11 @@ function drawGradingChart() {
     ctx.font = 'bold 14px sans-serif';
     ctx.textAlign = 'left';
     ctx.textBaseline = 'bottom';
-    ctx.strokeStyle = '#fff';
-    ctx.lineWidth = 3;
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 4;
     ctx.lineJoin = 'round';
+    ctx.miterLimit = 2;
+    ctx.strokeText(dl.label, hx + 4, hy - 3);
     ctx.strokeText(dl.label, hx + 4, hy - 3);
     ctx.fillStyle = dl.color;
     ctx.fillText(dl.label, hx + 4, hy - 3);
