@@ -66,6 +66,8 @@ export class SpatialHash {
         }
       }
     }
+    // Sort to preserve deterministic Gauss-Seidel-like iteration order
+    pairs.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
     return pairs;
   }
 }

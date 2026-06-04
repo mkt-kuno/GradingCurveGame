@@ -46,19 +46,22 @@ export const ESTAR_PW = 10000;
 export const KN_PP = 100000;
 export const KN_PW = 100000;
 
+// Silica sand (Toyoura sand) — conservative (less bouncy) parameters
+// Restitution lowered from 0.35 to 0.25 (safer side of 0.3-0.5 range)
+// Rolling friction increased toward upper literature bounds
 export const MU_PP = 0.65;
 export const MU_PW = 0.80;
-export const REST_PP = 0.35;
-export const REST_PW = 0.35;
+export const REST_PP = 0.25;
+export const REST_PW = 0.25;
 
-export const MU_ROLL_PP = 0.15;
-export const MU_ROLL_PW = 0.30;
+export const MU_ROLL_PP = 0.20;
+export const MU_ROLL_PW = 0.35;
 
-export const SUB_STEPS = 10;
-export const MAX_DELTA_RATIO = 0.08;
+export const SUB_STEPS = 12;
+export const MAX_DELTA_RATIO = 0.06;
 export const MAX_VEL = 3000;
 export const MAX_OMEGA = 80;
-export const VEL_DAMP = 0.9995;
+export const VEL_DAMP = 0.999;
 export const ANG_DAMP = 0.998;
 
 export function beta(e: number): number {
