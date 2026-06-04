@@ -1105,7 +1105,7 @@ function drawGradingChart() {
     ctx.globalAlpha = 1;
     ctx.setLineDash([]);
     ctx.fillStyle = dl.color;
-    ctx.font = 'bold 8px sans-serif';
+    ctx.font = 'bold 7px sans-serif';
     ctx.textAlign = 'left';
     ctx.textBaseline = 'bottom';
     ctx.fillText(dl.label, hx + 4, hy - 3);
