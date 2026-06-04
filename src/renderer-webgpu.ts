@@ -162,7 +162,7 @@ export class WebGPURenderer {
     this.overlayCanvas = document.createElement('canvas');
     this.overlayCanvas.width = GAME_W;
     this.overlayCanvas.height = GAME_H;
-    this.overlayCanvas.style.cssText = 'position:absolute;top:0;left:0;pointer-events:none;border-radius:12px';
+    this.overlayCanvas.style.cssText = 'position:absolute;top:0;left:0;pointer-events:none;border-radius:12px;z-index:10';
     this.overlayCtx = this.overlayCanvas.getContext('2d')!;
     document.getElementById('game-section')!.style.position = 'relative';
     document.getElementById('game-section')!.appendChild(this.overlayCanvas);
@@ -215,7 +215,7 @@ export class WebGPURenderer {
     const pass = encoder.beginRenderPass({
       colorAttachments: [{
         view: this.context.getCurrentTexture().createView(),
-        clearValue: { r: 0, g: 0, b: 0, a: 0 },
+        clearValue: { r: 0.059, g: 0.059, b: 0.137, a: 1 },
         loadOp: 'clear',
         storeOp: 'store',
       }],
@@ -227,17 +227,10 @@ export class WebGPURenderer {
     pass.end();
     device.queue.submit([encoder.finish()]);
 
-    // Canvas2D overlay for everything else
+    // Canvas2D overlay (text, effects, walls on top)
     ctx.clearRect(0, 0, GAME_W, GAME_H);
 
-    // Background
-    ctx.fillStyle = '#0f0f23';
-    ctx.fillRect(0, 0, GAME_W, GAME_H);
-    const bgGrad = ctx.createLinearGradient(0, 0, 0, GAME_H);
-    bgGrad.addColorStop(0, '#151530');
-    bgGrad.addColorStop(1, '#0d0d20');
-    ctx.fillStyle = bgGrad;
-    ctx.fillRect(CL, 0, CONTAINER_W, GAME_H);
+    // Walls + container outline (on top of particles)
     ctx.fillStyle = '#1e1e45';
     ctx.fillRect(0, 0, WALL_T, GAME_H);
     ctx.fillRect(CR, 0, WALL_T, GAME_H);

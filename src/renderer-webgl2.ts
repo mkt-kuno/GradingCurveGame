@@ -337,7 +337,7 @@ export class WebGL2Renderer {
     this.overlayCanvas = document.createElement('canvas');
     this.overlayCanvas.width = GAME_W;
     this.overlayCanvas.height = GAME_H;
-    this.overlayCanvas.style.cssText = 'position:absolute;top:0;left:0;pointer-events:none;border-radius:12px';
+    this.overlayCanvas.style.cssText = 'position:absolute;top:0;left:0;pointer-events:none;border-radius:12px;z-index:10';
     this.overlayCtx = this.overlayCanvas.getContext('2d')!;
     document.getElementById('game-section')!.style.position = 'relative';
     document.getElementById('game-section')!.appendChild(this.overlayCanvas);
@@ -362,6 +362,12 @@ export class WebGL2Renderer {
   ) {
     const gl = this.gl;
     gl.viewport(0, 0, GAME_W, GAME_H);
+
+    // Clear blur buffer to prevent stale glow
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.blurBFBO.framebuffer);
+    gl.clearColor(0, 0, 0, 0);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
 
     // === Background ===
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.sceneFBO.framebuffer);

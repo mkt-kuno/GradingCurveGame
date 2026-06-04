@@ -84,7 +84,7 @@ let rendererName = 'Canvas2D';
 // ================================================================
 
 const gameCanvas = document.getElementById('game-canvas') as HTMLCanvasElement;
-const gCtx = gameCanvas.getContext('2d')!;
+let gCtx: CanvasRenderingContext2D | null = null;
 const chartCanvas = document.getElementById('chart-canvas') as HTMLCanvasElement;
 const cCtx = chartCanvas.getContext('2d')!;
 const nextCanvas = document.getElementById('next-canvas') as HTMLCanvasElement;
@@ -145,17 +145,15 @@ async function initRenderer() {
 
   // Try WebGL2
   try {
-    const gl = gameCanvas.getContext('webgl2');
-    if (gl) {
-      gpuRenderer = new WebGL2Renderer(gameCanvas);
-      rendererName = 'WebGL2 Enable';
-      return;
-    }
+    gpuRenderer = new WebGL2Renderer(gameCanvas);
+    rendererName = 'WebGL2 Enable';
+    return;
   } catch (e) {
     console.log('WebGL2 not available:', e);
   }
 
   // Canvas2D fallback
+  gCtx = gameCanvas.getContext('2d')!;
   rendererName = 'Canvas2D';
 }
 
@@ -665,6 +663,7 @@ function restart() {
 let dangerTimer = 0;
 
 function drawGameCanvas2D() {
+  if (!gCtx) return;
   const ctx = gCtx;
   ctx.clearRect(0, 0, GAME_W, GAME_H);
 
