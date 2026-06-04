@@ -36,8 +36,9 @@ jobs:
           cp dist/game.js _deploy/dist/
           cp sw.js _deploy/
           cp manifest.json _deploy/
-          cp icons/icon.svg _deploy/icons/
-          cp icons/icon.svg _deploy/favicon.svg
+          cp icons/icon.png _deploy/icons/
+          cp icons/icon_256x256.png _deploy/icons/
+          cp icons/icon_16x16.png _deploy/icons/
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
