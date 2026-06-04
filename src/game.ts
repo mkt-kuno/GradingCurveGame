@@ -1104,10 +1104,14 @@ function drawGradingChart() {
     ctx.stroke();
     ctx.globalAlpha = 1;
     ctx.setLineDash([]);
-    ctx.fillStyle = dl.color;
     ctx.font = 'bold 14px sans-serif';
     ctx.textAlign = 'left';
     ctx.textBaseline = 'bottom';
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 3;
+    ctx.lineJoin = 'round';
+    ctx.strokeText(dl.label, hx + 4, hy - 3);
+    ctx.fillStyle = dl.color;
     ctx.fillText(dl.label, hx + 4, hy - 3);
     ctx.textBaseline = 'alphabetic';
     ctx.beginPath();
