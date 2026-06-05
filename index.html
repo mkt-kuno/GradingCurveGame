@@ -125,16 +125,5 @@ footer{width:100%;text-align:center;padding:12px 0 8px;font-size:24px;color:#444
   ['click','touchstart','keydown'].forEach(function(e){document.addEventListener(e,start,{once:true,passive:true});});
 })();
 </script>
-<script>
-(function(){
-  fetch('package.json')
-    .then(function(r){return r.json();})
-    .then(function(pkg){
-      var el=document.getElementById('app-version');
-      if(el && pkg.version){el.textContent='App ver '+pkg.version;}
-    })
-    .catch(function(err){console.warn('Failed to load version:',err);});
-})();
-</script>
 </body>
 </html>

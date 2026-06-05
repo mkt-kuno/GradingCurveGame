@@ -21,10 +21,11 @@ self.addEventListener('activate', e => {
 });
 
 self.addEventListener('fetch', e => {
+  if (e.request.method !== 'GET') return;
   e.respondWith(
     fetch(e.request)
       .then(r => {
-        if (r.ok) {
+        if (r.ok && r.status !== 206) {
           const clone = r.clone();
           caches.open(CACHE).then(c => c.put(e.request, clone));
         }
