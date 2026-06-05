@@ -114,7 +114,7 @@ footer{width:100%;text-align:center;padding:12px 0 8px;font-size:24px;color:#444
   </div>
 </div>
 <audio id="bgm" src="bgm.opus" loop></audio>
-<footer><span id="app-version">v?.?.?</span> | 開発者: 桑野研究室 ゲーム開発部（GDD） 顧問 久野 洵   |   BGM: <a href="https://dova-s.jp/bgm/detail/8536" target="_blank" rel="noopener" style="color:#444;text-decoration:none">「実験中・証明中」</a> written by ゆーぎり (DOVA-SYNDROME)</footer>
+<footer><span id="app-version">App ver ?.?.?</span> | 開発者: 桑野研究室 ゲーム開発部（GDD） 顧問 久野 洵   |   BGM: <a href="https://dova-s.jp/bgm/detail/8536" target="_blank" rel="noopener" style="color:#444;text-decoration:none">「実験中・証明中」</a> written by ゆーぎり (DOVA-SYNDROME)</footer>
 <script src="dist/game.js"></script>
 <script>
 (function(){
@@ -131,7 +131,7 @@ footer{width:100%;text-align:center;padding:12px 0 8px;font-size:24px;color:#444
     .then(function(r){return r.json();})
     .then(function(pkg){
       var el=document.getElementById('app-version');
-      if(el && pkg.version){el.textContent='v'+pkg.version;}
+      if(el && pkg.version){el.textContent='App ver '+pkg.version;}
     })
     .catch(function(err){console.warn('Failed to load version:',err);});
 })();
