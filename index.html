@@ -60,7 +60,7 @@ footer{width:100%;text-align:center;padding:12px 0 8px;font-size:24px;color:#444
 <div id="app">
   <div id="left-panel">
     <div class="panel">
-      <h3>粒径加積曲線 (Grading Curve)</h3>
+      <h3>粒径加積曲線 / Grading Curve</h3>
       <canvas id="chart-canvas" width="540" height="585"></canvas>
       <div id="grading-params"></div>
       <div id="soil-class">
@@ -81,33 +81,33 @@ footer{width:100%;text-align:center;padding:12px 0 8px;font-size:24px;color:#444
     <canvas id="game-canvas" width="858" height="925"></canvas>
     <div id="game-over">
       <h2>GAME OVER</h2>
-      <p>最終スコア: <span id="final-score">0</span></p>
-      <button id="restart-btn">もう一度</button>
+      <p>最終スコア / FinalScore: <span id="final-score">0</span></p>
+      <button id="restart-btn">もう一度 / Again</button>
     </div>
   </div>
   <div id="right-panel">
     <div class="panel">
-      <h3>スコア</h3>
+      <h3>スコア / Score</h3>
       <div id="score-value">0</div>
-      <div id="high-score">今日のハイスコア: 0</div>
-      <button id="score-restart-btn" style="margin-top:12px;width:100%;padding:10px 0;font-size:16px;font-weight:bold;background:#FF6B00;color:#fff;border:none;border-radius:6px;cursor:pointer;transition:background .2s">リセット</button>
+      <div id="high-score">今日のハイスコア / Todays HighScore: 0</div>
+      <button id="score-restart-btn" style="margin-top:12px;width:100%;padding:10px 0;font-size:16px;font-weight:bold;background:#FF6B00;color:#fff;border:none;border-radius:6px;cursor:pointer;transition:background .2s">リセット / Reset</button>
     </div>
     <div class="panel">
-      <h3>次の粒子</h3>
+      <h3>次の粒子 / Next</h3>
       <div id="next-preview">
         <canvas id="next-canvas" width="96" height="96"></canvas>
         <span id="next-name"></span>
       </div>
     </div>
     <div class="panel">
-      <h3>接触モデル</h3>
+      <h3>接触モデル / Model</h3>
       <div id="model-buttons">
         <button id="btn-hooke" class="active">Hooke</button>
         <button id="btn-hertz">Hertz</button>
       </div>
       <label id="chk-wrap">
         <input type="checkbox" id="chk-forces" checked>
-        力の連鎖表示
+        力の連鎖表示 / Chain Reaction
       </label>
     </div>
     <div class="panel" id="controls-panel">

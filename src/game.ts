@@ -120,7 +120,7 @@ function saveHighScore(s: number) {
 }
 
 let highScore = loadHighScore();
-highScoreEl.textContent = `今日のハイスコア: ${highScore}`;
+highScoreEl.textContent = `今日のハイスコア / Todays HighScore: ${highScore}`;
 
 // ================================================================
 // Renderer Detection
@@ -558,7 +558,7 @@ function doGameOver() {
   if (score > highScore) {
     highScore = score;
     saveHighScore(highScore);
-    highScoreEl.textContent = `今日のハイスコア: ${highScore}`;
+    highScoreEl.textContent = `今日のハイスコア / Todays HighScore: ${highScore}`;
   }
 }
 
@@ -699,7 +699,7 @@ function restart() {
   scoreEl.textContent = '0';
   gameOverEl.style.display = 'none';
   highScore = loadHighScore();
-  highScoreEl.textContent = `今日のハイスコア: ${highScore}`;
+  highScoreEl.textContent = `今日のハイスコア / Todays HighScore: ${highScore}`;
   updateNextPreview();
   chartDirty = true;
 }
