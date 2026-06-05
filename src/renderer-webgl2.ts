@@ -2,7 +2,7 @@
 // WebGL2 Renderer — instanced particles, FBO glow, texture atlas text
 // ================================================================
 
-import { LEVELS, GAME_W, GAME_H, WALL_T, CL, CR, CB, DANGER_Y } from './constants';
+import { LEVELS, GAME_W, GAME_H, WALL_T, CL, CR, CB, DANGER_Y, DROP_Y } from './constants';
 
 interface ContactVis { x: number; y: number; force: number; }
 interface Effect { x: number; y: number; r: number; alpha: number; color: string; }
