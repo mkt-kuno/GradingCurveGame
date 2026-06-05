@@ -57,7 +57,7 @@ export const REST_PW = 0.25;
 export const MU_ROLL_PP = 0.20;
 export const MU_ROLL_PW = 0.35;
 
-export const SUB_STEPS = 12;
+export const SUB_STEPS = 16;
 export const MAX_DELTA_RATIO = 0.06;
 export const MAX_VEL = 3000;
 export const MAX_OMEGA = 80;
