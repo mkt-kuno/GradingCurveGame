@@ -16,7 +16,9 @@
 <link rel="icon" href="icons/icon.png" type="image/png">
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
-body{background:#0a0a1a;color:#eee;font-family:'Segoe UI','Helvetica Neue',sans-serif;display:flex;flex-direction:column;justify-content:flex-start;align-items:center;min-height:100vh;padding:8px;overflow-y:auto;font-size:16px}
+html,body{height:100%;overflow:hidden}
+body{background:#0a0a1a;color:#eee;font-family:'Segoe UI','Helvetica Neue',sans-serif;display:flex;flex-direction:column;justify-content:flex-start;align-items:center;font-size:16px}
+#scale-wrap{width:1920px;flex-shrink:0;transform-origin:top center;transform:scale(var(--scale,1));display:flex;flex-direction:column;align-items:center;padding:8px;will-change:transform}
 footer{width:100%;text-align:center;padding:12px 0 8px;font-size:24px;color:#444;font-weight:bold}
 #app{display:flex;gap:12px;flex-wrap:wrap;justify-content:center;align-items:flex-start;max-width:1920px;width:100%}
 #left-panel{width:612px;display:flex;flex-direction:column;gap:12px;flex-shrink:0}
@@ -54,6 +56,7 @@ footer{width:100%;text-align:center;padding:12px 0 8px;font-size:24px;color:#444
 </style>
 </head>
 <body>
+<div id="scale-wrap">
 <div id="app">
   <div id="left-panel">
     <div class="panel">
@@ -113,8 +116,9 @@ footer{width:100%;text-align:center;padding:12px 0 8px;font-size:24px;color:#444
     </div>
   </div>
 </div>
-<audio id="bgm" src="bgm.opus" loop></audio>
 <footer><span id="app-version">Application: version ?.?.?</span> | 開発者: 桑野研究室 ゲーム開発部（GDD） 顧問 久野 洵   |   BGM: <a href="https://dova-s.jp/bgm/detail/8536" target="_blank" rel="noopener" style="color:#444;text-decoration:none">「実験中・証明中」</a> written by ゆーぎり (DOVA-SYNDROME)</footer>
+</div>
+<audio id="bgm" src="bgm.opus" loop></audio>
 <script src="dist/game.js"></script>
 <script>
 (function(){
@@ -123,6 +127,18 @@ footer{width:100%;text-align:center;padding:12px 0 8px;font-size:24px;color:#444
   var started=false;
   function start(){if(!started){started=true;bgm.play().catch(function(err){console.warn('BGM playback failed:',err);});}}
   ['click','touchstart','keydown'].forEach(function(e){document.addEventListener(e,start,{once:true,passive:true});});
+})();
+(function(){
+  var baseW=1920,baseH=1000;
+  function fit(){
+    var sx=window.innerWidth/baseW;
+    var sy=window.innerHeight/baseH;
+    var s=Math.min(sx,sy);
+    document.documentElement.style.setProperty('--scale',s);
+  }
+  window.addEventListener('resize',fit);
+  window.addEventListener('orientationchange',fit);
+  fit();
 })();
 </script>
 </body>
