@@ -9,7 +9,7 @@ import {
   LEVELS, SIEVE_SIZES, GAME_W, GAME_H, WALL_T, CL, CR, CB, CONTAINER_W, CONTAINER_H,
   DROP_Y, DANGER_Y, GRAVITY, ESTAR_PP, ESTAR_PW, KN_PP, KN_PW,
   MU_PP, MU_PW, REST_PP, REST_PW, MU_ROLL_PP, MU_ROLL_PW,
-  SUB_STEPS, MAX_DELTA_RATIO, MAX_VEL, MAX_OMEGA, VEL_DAMP, ANG_DAMP,
+  SUB_STEPS, COMBO_TIMEOUT_STEPS, GRACE_STEPS, MAX_DELTA_RATIO, MAX_VEL, MAX_OMEGA, VEL_DAMP, ANG_DAMP,
   BETA_PP, BETA_PW,
 } from './constants';
 
@@ -609,7 +609,7 @@ function processMerges() {
       score += pts;
       mergeCount++;
       comboCount++;
-      comboTimer = 45;
+      comboTimer = COMBO_TIMEOUT_STEPS;
       effects.push({ x: mx, y: my, r: 10, alpha: 1, color: '#FFFFFF' });
       effects.push({ x: mx, y: my, r: 30, alpha: 0.7, color: '#F5E6CC' });
       scorePopups.push({ x: mx, y: my, text: `+${pts} MAX!`, timer: 90 });
@@ -625,13 +625,13 @@ function processMerges() {
     np.vy = Math.max(avgVy * 0.15, 0);
     np.omega = 0;
     np.active = a.active || b.active;
-    np.graceFrames = 30;
+    np.graceFrames = GRACE_STEPS;
     particles.push(np);
 
     effects.push({ x: mx, y: my, r: LEVELS[newLevel].radius * 0.3, alpha: 1, color: LEVELS[newLevel].color });
 
     comboCount++;
-    comboTimer = 45;
+    comboTimer = COMBO_TIMEOUT_STEPS;
     const pts = Math.floor(LEVELS[newLevel].score * (1 + (comboCount - 1) * 0.5));
     score += pts;
     mergeCount++;
@@ -641,7 +641,7 @@ function processMerges() {
 
   mergeQueue = [];
   if (comboTimer > 0) {
-    comboTimer--;
+    comboTimer -= SUB_STEPS;
     if (comboTimer === 0) comboCount = 0;
   }
 
@@ -800,7 +800,7 @@ function drawGameCanvas2D() {
 
   // Combo
   if (comboCount > 1 && comboTimer > 0) {
-    const alpha = comboTimer / 45;
+    const alpha = comboTimer / COMBO_TIMEOUT_STEPS;
     const sz = 22 + comboCount * 2;
     ctx.font = `bold ${sz}px sans-serif`;
     ctx.textAlign = 'center';
@@ -1171,7 +1171,7 @@ function update() {
     processMerges();
     checkGameOver();
     for (const p of particles) {
-      if (p.graceFrames > 0) p.graceFrames--;
+      if (p.graceFrames > 0) p.graceFrames -= SUB_STEPS;
     }
 
     // Check if the last dropped particle has cleared the danger line or touched another particle

@@ -4,7 +4,7 @@
 // ================================================================
 
 import {
-  LEVELS, GAME_W, GAME_H, WALL_T, CL, CR, CB, DANGER_Y, DROP_Y,
+  LEVELS, GAME_W, GAME_H, WALL_T, CL, CR, CB, DANGER_Y, DROP_Y, COMBO_TIMEOUT_STEPS,
 } from './constants';
 
 interface ContactVis { x: number; y: number; force: number; }
@@ -333,7 +333,7 @@ export class WebGPURenderer {
 
     // Combo
     if (comboCount > 1 && comboTimer > 0) {
-      const alpha = comboTimer / 45;
+      const alpha = comboTimer / COMBO_TIMEOUT_STEPS;
       const sz = 22 + comboCount * 2;
       ctx.font = `bold ${sz}px sans-serif`;
       ctx.textAlign = 'center';

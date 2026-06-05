@@ -58,6 +58,10 @@ export const MU_ROLL_PP = 0.20;
 export const MU_ROLL_PW = 0.35;
 
 export const SUB_STEPS = 16;
+export const COMBO_TIMEOUT_FRAMES = 45;
+export const GRACE_FRAMES = 30;
+export const COMBO_TIMEOUT_STEPS = COMBO_TIMEOUT_FRAMES * SUB_STEPS;
+export const GRACE_STEPS = GRACE_FRAMES * SUB_STEPS;
 export const MAX_DELTA_RATIO = 0.06;
 export const MAX_VEL = 3000;
 export const MAX_OMEGA = 80;
