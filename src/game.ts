@@ -65,6 +65,7 @@ let contactModel: ContactModel = 'hooke';
 let showForceChains = true;
 let comboCount = 0;
 let comboTimer = 0;
+let lastDroppedId: number | null = null;
 
 // Spatial hash
 const spatialHash = new SpatialHash(500);
@@ -485,6 +486,63 @@ function physicsStep(dt: number) {
     }
   }
 
+  // Iterative position correction (resolve overlaps without adding energy)
+  for (let iter = 0; iter < 3; iter++) {
+    // Particle-particle separation
+    for (const [i, j] of spatialHash.findPairs(particles)) {
+      const a = particles[i];
+      const b = particles[j];
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const distSq = dx * dx + dy * dy;
+      const minDist = a.radius + b.radius;
+      if (distSq >= minDist * minDist) continue;
+      const dist = Math.sqrt(Math.max(distSq, 1e-8));
+      const overlap = minDist - dist;
+      if (overlap <= 0) continue;
+      const nx = dx / dist;
+      const ny = dy / dist;
+      const totalM = a.mass + b.mass;
+      const corr = overlap * 0.3;
+      a.x -= nx * corr * (b.mass / totalM);
+      a.y -= ny * corr * (b.mass / totalM);
+      b.x += nx * corr * (a.mass / totalM);
+      b.y += ny * corr * (a.mass / totalM);
+    }
+
+    // Wall clamping
+    for (const p of particles) {
+      if (p.y + p.radius > CB) p.y = CB - p.radius;
+      if (p.x - p.radius < CL) p.x = CL + p.radius;
+      if (p.x + p.radius > CR) p.x = CR - p.radius;
+    }
+
+    // Wall-squeeze detection: if a particle is pressed against a wall by another particle, push the other particle away
+    for (const p of particles) {
+      const atLeftWall = (p.x - p.radius) < CL + 1;
+      const atRightWall = (p.x + p.radius) > CR - 1;
+      const atBottom = (p.y + p.radius) > CB - 1;
+      if (!atLeftWall && !atRightWall && !atBottom) continue;
+
+      for (const q of particles) {
+        if (p === q) continue;
+        const dx = q.x - p.x;
+        const dy = q.y - p.y;
+        const distSq = dx * dx + dy * dy;
+        const minDist = p.radius + q.radius;
+        if (distSq >= minDist * minDist) continue;
+        const dist = Math.sqrt(Math.max(distSq, 1e-8));
+        const overlap = minDist - dist;
+        if (overlap <= 0) continue;
+        // Push q away from p (p is against wall, so only move q)
+        const nx = dx / dist;
+        const ny = dy / dist;
+        q.x += nx * overlap * 0.5;
+        q.y += ny * overlap * 0.5;
+      }
+    }
+  }
+
   contactVis = newContactVis;
   contactedPairs = newPairs;
 }
@@ -611,10 +669,10 @@ function drop() {
   const p = createParticle(cx, DROP_Y, currentLevel);
   particles.push(p);
   canDrop = false;
+  lastDroppedId = p.id;
   currentLevel = nextLevel;
   nextLevel = getRandomLevel();
   updateNextPreview();
-  setTimeout(() => { if (!gameOver) canDrop = true; }, 500);
   chartDirty = true;
 }
 
@@ -636,6 +694,7 @@ function restart() {
   comboCount = 0;
   comboTimer = 0;
   mergeCount = 0;
+  lastDroppedId = null;
 
   scoreEl.textContent = '0';
   gameOverEl.style.display = 'none';
@@ -1113,6 +1172,33 @@ function update() {
     checkGameOver();
     for (const p of particles) {
       if (p.graceFrames > 0) p.graceFrames--;
+    }
+
+    // Check if the last dropped particle has cleared the danger line or touched another particle
+    if (!canDrop && lastDroppedId !== null) {
+      const dp = particles.find(p => p.id === lastDroppedId);
+      if (!dp) {
+        // Particle was consumed by merge — allow next drop
+        canDrop = true;
+        lastDroppedId = null;
+      } else {
+        const fullyBelowLine = (dp.y - dp.radius) > DANGER_Y;
+        let hasContact = false;
+        if (!fullyBelowLine) {
+          for (const q of particles) {
+            if (q === dp) continue;
+            const dx = q.x - dp.x;
+            const dy = q.y - dp.y;
+            const distSq = dx * dx + dy * dy;
+            const minDist = dp.radius + q.radius + 2; // small tolerance for near-contact
+            if (distSq < minDist * minDist) { hasContact = true; break; }
+          }
+        }
+        if (fullyBelowLine || hasContact) {
+          canDrop = true;
+          lastDroppedId = null;
+        }
+      }
     }
   }
 
