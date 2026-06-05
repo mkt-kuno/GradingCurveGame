@@ -1,8 +1,7 @@
 // ================================================================
 // 粒度分布ゲーム - 土質工学メロンゲーム
-// DEM Physics + GPU Rendering (WebGPU / WebGL2 / Canvas2D fallback)
+// DEM Physics + GPU Rendering (WebGPU / Canvas2D fallback)
 // Phase 1: CPU optimizations (spatial hash, no shadowBlur, cache, throttled chart)
-// Phase 2: WebGL2 instanced rendering + FBO glow
 // Phase 3: WebGPU rendering
 // ================================================================
 
@@ -15,7 +14,6 @@ import {
 } from './constants';
 
 import { SpatialHash } from './spatial';
-import { WebGL2Renderer } from './renderer-webgl2';
 import { WebGPURenderer } from './renderer-webgpu';
 
 // ================================================================
@@ -76,7 +74,7 @@ let chartDirty = true;
 let lastChartFrame = 0;
 
 // Renderer
-let gpuRenderer: WebGL2Renderer | WebGPURenderer | null = null;
+let gpuRenderer: WebGPURenderer | null = null;
 let rendererName = 'Canvas2D';
 
 // ================================================================
@@ -141,15 +139,6 @@ async function initRenderer() {
     }
   } catch (e) {
     console.log('WebGPU not available:', e);
-  }
-
-  // Try WebGL2
-  try {
-    gpuRenderer = new WebGL2Renderer(gameCanvas);
-    rendererName = 'WebGL2 Enable';
-    return;
-  } catch (e) {
-    console.log('WebGL2 not available:', e);
   }
 
   // Canvas2D fallback
