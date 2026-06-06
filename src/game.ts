@@ -94,6 +94,7 @@ const highScoreEl = document.getElementById('high-score')!;
 const nextNameEl = document.getElementById('next-name')!;
 const gameOverEl = document.getElementById('game-over')!;
 const finalScoreEl = document.getElementById('final-score')!;
+const topScoresEl = document.getElementById('top-scores')!;
 const restartBtn = document.getElementById('restart-btn')!;
 const paramsEl = document.getElementById('grading-params')!;
 const btnHooke = document.getElementById('btn-hooke') as HTMLButtonElement;
@@ -117,6 +118,31 @@ function loadHighScore(): number {
 
 function saveHighScore(s: number) {
   localStorage.setItem('granularity_highscore', JSON.stringify({ date: getTodayKey(), score: s }));
+}
+
+const APP_VERSION = '3.4.1';
+
+interface TopScoreEntry { date: string; version: string; model: string; score: number; }
+
+function loadTopScores(): TopScoreEntry[] {
+  try {
+    const data = localStorage.getItem('granularity_top3');
+    if (!data) return [];
+    return (JSON.parse(data) as TopScoreEntry[]).slice(0, 3);
+  } catch { return []; }
+}
+
+function saveTopScores(scores: TopScoreEntry[]) {
+  localStorage.setItem('granularity_top3', JSON.stringify(scores.slice(0, 3)));
+}
+
+function addScoreToTop(s: number): TopScoreEntry[] {
+  const scores = loadTopScores();
+  scores.push({ date: getTodayKey(), version: APP_VERSION, model: contactModel, score: s });
+  scores.sort((a, b) => b.score - a.score);
+  const top3 = scores.slice(0, 3);
+  saveTopScores(top3);
+  return top3;
 }
 
 let highScore = loadHighScore();
@@ -554,6 +580,10 @@ function physicsStep(dt: number) {
 function doGameOver() {
   gameOver = true;
   finalScoreEl.textContent = score.toString();
+  const top3 = addScoreToTop(score);
+  topScoresEl.innerHTML = top3.map((e, i) =>
+    `<div class="top-score-row">${i + 1}. ${e.date} &nbsp; v${e.version} &nbsp; ${e.model === 'hertz' ? 'Hertz' : 'Hooke'} &nbsp; <b>${e.score}</b></div>`
+  ).join('');
   gameOverEl.style.display = 'flex';
   if (score > highScore) {
     highScore = score;
@@ -665,7 +695,8 @@ function getRandomLevel(): number {
 function drop() {
   if (!canDrop || gameOver) return;
   const r = LEVELS[currentLevel].radius;
-  const cx = Math.max(CL + r + 2, Math.min(CR - r - 2, dropX));
+  const jitter = (Math.random() - 0.5) * 2;
+  const cx = Math.max(CL + r + 2, Math.min(CR - r - 2, dropX + jitter));
   const p = createParticle(cx, DROP_Y, currentLevel);
   particles.push(p);
   canDrop = false;
@@ -698,6 +729,7 @@ function restart() {
 
   scoreEl.textContent = '0';
   gameOverEl.style.display = 'none';
+  topScoresEl.innerHTML = '';
   highScore = loadHighScore();
   highScoreEl.textContent = `今日のハイスコア / Todays HighScore: ${highScore}`;
   updateNextPreview();

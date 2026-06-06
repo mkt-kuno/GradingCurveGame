@@ -29,6 +29,9 @@ footer{width:100%;text-align:center;padding:12px 0 8px;font-size:24px;color:#444
 #game-over p{font-size:22px;color:#ccc}
 #game-over button{padding:14px 44px;font-size:22px;background:#FF6B00;color:#fff;border:none;border-radius:8px;cursor:pointer}
 #game-over button:hover{background:#CC5500}
+#top-scores{color:#ccc;font-size:18px;text-align:left;line-height:1.8}
+.top-score-row{padding:2px 0}
+.top-score-row b{color:#FFB366}
 #right-panel{width:390px;display:flex;flex-direction:column;gap:12px;flex-shrink:0}
 .panel{background:#16213e;border-radius:12px;padding:18px}
 .panel h3{font-size:34px;color:#FF6B00;text-transform:uppercase;letter-spacing:1px;margin-bottom:12px}
@@ -82,6 +85,7 @@ footer{width:100%;text-align:center;padding:12px 0 8px;font-size:24px;color:#444
     <div id="game-over">
       <h2>GAME OVER</h2>
       <p>最終スコア / FinalScore: <span id="final-score">0</span></p>
+      <div id="top-scores"></div>
       <button id="restart-btn">もう一度 / Again</button>
     </div>
   </div>
@@ -116,7 +120,7 @@ footer{width:100%;text-align:center;padding:12px 0 8px;font-size:24px;color:#444
     </div>
   </div>
 </div>
-<footer><span id="app-version">Application: version 3.2.0</span> | 開発者: 桑野研究室 ゲーム開発部（GDD） 顧問 久野 洵   |   BGM: <a href="https://dova-s.jp/bgm/detail/8536" target="_blank" rel="noopener" style="color:#444;text-decoration:none">「実験中・証明中」</a> written by ゆーぎり (DOVA-SYNDROME)</footer>
+<footer><span id="app-version">Application: version 3.4.1</span> | 開発者: 桑野研究室 ゲーム開発部（GDD） 顧問 久野 洵   |   BGM: <a href="https://dova-s.jp/bgm/detail/8536" target="_blank" rel="noopener" style="color:#444;text-decoration:none">「実験中・証明中」</a> written by ゆーぎり (DOVA-SYNDROME)</footer>
 </div>
 <audio id="bgm" src="bgm.opus" loop></audio>
 <script src="dist/game.js"></script>
