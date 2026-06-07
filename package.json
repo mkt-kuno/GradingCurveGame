@@ -1,6 +1,6 @@
 {
   "name": "grading-game",
-  "version": "3.4.1",
+  "version": "3.5.1",
   "scripts": {
     "build": "bun build src/game.ts --outfile dist/game.js --target browser && bun run scripts/build.ts",
     "serve": "bun run server.ts",
