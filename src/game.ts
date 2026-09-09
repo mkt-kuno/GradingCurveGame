@@ -727,8 +727,10 @@ function physicsStep(dt: number, profile: PerformanceProfile) {
 
 function overlapsAnyParticle(index: number, extra = 0): boolean {
   const p = particles[index];
+  if (!p) return false;
   for (const j of spatialHash.findNearbyIndices(particles, index, extra)) {
     const q = particles[j];
+    if (!q) continue;
     const dx = q.x - p.x;
     const dy = q.y - p.y;
     const minDist = p.radius + q.radius + extra;
@@ -841,6 +843,9 @@ function processMerges() {
 
   if (mergedAny || particles.length > 0) {
     chartDirty = true;
+  }
+  if (mergedAny) {
+    spatialHash.build(particles);
   }
 }
 
