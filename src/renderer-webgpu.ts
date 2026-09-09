@@ -96,6 +96,8 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
 `;
 
 const CIRCLE_SEGS = 24;
+const GPU_BUFFER_USAGE_VERTEX = 0x0020;
+const GPU_BUFFER_USAGE_COPY_DST = 0x0008;
 
 export class WebGPURenderer {
   device: GPUDevice;
@@ -111,7 +113,7 @@ export class WebGPURenderer {
 
   constructor(canvas: HTMLCanvasElement, device: GPUDevice) {
     this.device = device;
-    this.context = canvas.getContext('webgpu')!;
+    this.context = canvas.getContext('webgpu') as unknown as GPUCanvasContext;
     this.context.configure({ device, format: 'rgba8unorm', alphaMode: 'premultiplied' });
 
     // Circle mesh
@@ -125,7 +127,7 @@ export class WebGPURenderer {
 
     this.vertexBuffer = device.createBuffer({
       size: triVerts.length * 4,
-      usage: GPUBufferUsage.VERTEX,
+      usage: GPU_BUFFER_USAGE_VERTEX,
       mappedAtCreation: true,
     });
     new Float32Array(this.vertexBuffer.getMappedRange()).set(triVerts);
@@ -180,7 +182,7 @@ export class WebGPURenderer {
   private createInstanceBuffer(maxInst: number): GPUBuffer {
     return this.device.createBuffer({
       size: maxInst * 11 * 4,
-      usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+      usage: GPU_BUFFER_USAGE_VERTEX | GPU_BUFFER_USAGE_COPY_DST,
     });
   }
 
