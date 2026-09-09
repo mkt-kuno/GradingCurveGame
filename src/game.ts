@@ -83,7 +83,6 @@ let lastDropAnchorY = DROP_Y;
 let totalSimSteps = 0;
 let simStepSerial = 0;
 let stepsSinceDrop = 0;
-let lastStepBonus = 0;
 
 // Spatial hash
 const spatialHash = new SpatialHash(500);
@@ -94,7 +93,6 @@ let lastChartFrame = 0;
 
 // Renderer
 let gpuRenderer: WebGPURenderer | null = null;
-let rendererName = 'Canvas2D';
 
 // ================================================================
 // DOM
@@ -118,13 +116,9 @@ const paramsEl = document.getElementById('grading-params')!;
 const btnHooke = document.getElementById('btn-hooke') as HTMLButtonElement;
 const btnHertz = document.getElementById('btn-hertz') as HTMLButtonElement;
 const chkForces = document.getElementById('chk-forces') as HTMLInputElement;
-const stepValueEl = document.getElementById('step-value')!;
-const stepBonusEl = document.getElementById('step-bonus')!;
-const simStatsEl = document.getElementById('sim-stats')!;
 const compactHintEl = document.getElementById('compact-hint')!;
 const compactScoreEl = document.getElementById('compact-score')!;
 const compactNextEl = document.getElementById('compact-next')!;
-const compactStepBonusEl = document.getElementById('compact-step-bonus')!;
 const compactLeftBtn = document.getElementById('compact-left-btn') as HTMLButtonElement;
 const compactDropBtn = document.getElementById('compact-drop-btn') as HTMLButtonElement;
 const compactRightBtn = document.getElementById('compact-right-btn') as HTMLButtonElement;
@@ -186,10 +180,6 @@ function addScoreToTop(s: number): TopScoreEntry[] {
 }
 
 function updateHudStats() {
-  stepValueEl.textContent = totalSimSteps.toLocaleString();
-  stepBonusEl.textContent = `${lastStepBonus}`;
-  compactStepBonusEl.textContent = `${lastStepBonus}`;
-  simStatsEl.textContent = `N=${particles.length}  Merge=${mergeCount}  Renderer=${rendererName}`;
   compactScoreEl.textContent = score.toLocaleString();
 }
 
@@ -260,7 +250,6 @@ async function initRenderer() {
       if (adapter) {
         const device = await adapter.requestDevice();
         gpuRenderer = new WebGPURenderer(gameCanvas, device);
-        rendererName = 'WebGPU Enabled';
         return;
       }
     }
@@ -270,7 +259,6 @@ async function initRenderer() {
 
   // Canvas2D fallback
   gCtx = gameCanvas.getContext('2d')!;
-  rendererName = 'Canvas2D';
 }
 
 // ================================================================
@@ -418,13 +406,10 @@ function releaseDropGate(anchor?: { x: number; y: number }) {
   const bonus = computeStepBonus(stepsSinceDrop, lastDroppedLevel);
   if (bonus > 0) {
     score += bonus;
-    lastStepBonus = bonus;
     updateScoreDisplays();
     const x = anchor?.x ?? lastDropAnchorX;
     const y = anchor?.y ?? lastDropAnchorY;
     pushScorePopup({ x, y, text: `STEP +${bonus}`, timer: 55 });
-  } else {
-    lastStepBonus = 0;
   }
   canDrop = true;
   lastDroppedId = null;
@@ -878,7 +863,6 @@ function drop() {
   nextLevel = getRandomLevel();
   updateNextPreview();
   chartDirty = true;
-  lastStepBonus = 0;
   updateHudStats();
   vibrate(12);
 }
@@ -908,7 +892,6 @@ function restart() {
   totalSimSteps = 0;
   simStepSerial = 0;
   stepsSinceDrop = 0;
-  lastStepBonus = 0;
 
   updateScoreDisplays();
   gameOverEl.style.display = 'none';
@@ -1055,7 +1038,7 @@ function drawGameCanvas2D(profile: PerformanceProfile) {
   ctx.textAlign = 'left';
   ctx.fillStyle = 'rgba(255,255,255,0.4)';
   const modelText = contactModel === 'hertz' ? 'Hertz Contact' : 'Hooke Contact';
-  ctx.fillText(`${modelText}  N=${particles.length}  ${rendererName}`, CL + 4, 14);
+  ctx.fillText(modelText, CL + 4, 14);
 }
 
 // ================================================================
@@ -1494,7 +1477,6 @@ function update() {
       contactModel, showForceChains,
       dangerTimer > 0 ? 0.7 + 0.3 * Math.abs(Math.sin(Date.now() / 130)) : 0.6,
       Date.now() / 1000,
-      rendererName,
       profile,
     );
   } else {
