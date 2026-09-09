@@ -66,6 +66,12 @@ let showForceChains = true;
 let comboCount = 0;
 let comboTimer = 0;
 let lastDroppedId: number | null = null;
+let lastDroppedLevel = 0;
+let lastDropAnchorX = GAME_W / 2;
+let lastDropAnchorY = DROP_Y;
+let totalSimSteps = 0;
+let stepsSinceDrop = 0;
+let lastStepBonus = 0;
 
 // Spatial hash
 const spatialHash = new SpatialHash(500);
@@ -100,6 +106,16 @@ const paramsEl = document.getElementById('grading-params')!;
 const btnHooke = document.getElementById('btn-hooke') as HTMLButtonElement;
 const btnHertz = document.getElementById('btn-hertz') as HTMLButtonElement;
 const chkForces = document.getElementById('chk-forces') as HTMLInputElement;
+const stepValueEl = document.getElementById('step-value')!;
+const stepBonusEl = document.getElementById('step-bonus')!;
+const simStatsEl = document.getElementById('sim-stats')!;
+const compactHintEl = document.getElementById('compact-hint')!;
+
+const pressedKeys = new Set<string>();
+let cachedCanvasRect = new DOMRect(0, 0, GAME_W, GAME_H);
+let activePointerId: number | null = null;
+let pointerStartX = 0;
+let pointerDragDistance = 0;
 
 function getTodayKey(): string {
   const d = new Date();
@@ -143,6 +159,18 @@ function addScoreToTop(s: number): TopScoreEntry[] {
   const top3 = scores.slice(0, 3);
   saveTopScores(top3);
   return top3;
+}
+
+function updateHudStats() {
+  stepValueEl.textContent = totalSimSteps.toLocaleString();
+  stepBonusEl.textContent = `${lastStepBonus}`;
+  simStatsEl.textContent = `N=${particles.length}  Merge=${mergeCount}  Renderer=${rendererName}`;
+}
+
+function updateLayoutHint() {
+  compactHintEl.textContent = window.matchMedia('(max-width: 900px), (max-height: 760px)').matches
+    ? 'Compact mobile layout active'
+    : 'Desktop layout active';
 }
 
 let highScore = loadHighScore();
@@ -291,6 +319,45 @@ function pairKey(a: number, b: number): string {
 
 function clamp(v: number, lo: number, hi: number): number {
   return v < lo ? lo : v > hi ? hi : v;
+}
+
+function updateCanvasRect() {
+  cachedCanvasRect = gameCanvas.getBoundingClientRect();
+}
+
+function setDropFromClientX(clientX: number) {
+  const width = Math.max(cachedCanvasRect.width, 1);
+  dropX = clamp((clientX - cachedCanvasRect.left) * (GAME_W / width), CL + 20, CR - 20);
+}
+
+function computeStepBonus(steps: number, level: number): number {
+  const base = LEVELS[level].score;
+  if (steps <= SUB_STEPS * 6) return base * 3;
+  if (steps <= SUB_STEPS * 12) return base * 2;
+  if (steps <= SUB_STEPS * 20) return base;
+  return 0;
+}
+
+function vibrate(pattern: number | number[]) {
+  if (typeof navigator.vibrate === 'function') navigator.vibrate(pattern);
+}
+
+function releaseDropGate(anchor?: { x: number; y: number }) {
+  const bonus = computeStepBonus(stepsSinceDrop, lastDroppedLevel);
+  if (bonus > 0) {
+    score += bonus;
+    lastStepBonus = bonus;
+    scoreEl.textContent = score.toString();
+    const x = anchor?.x ?? lastDropAnchorX;
+    const y = anchor?.y ?? lastDropAnchorY;
+    scorePopups.push({ x, y, text: `STEP +${bonus}`, timer: 55 });
+  } else {
+    lastStepBonus = 0;
+  }
+  canDrop = true;
+  lastDroppedId = null;
+  stepsSinceDrop = 0;
+  updateHudStats();
 }
 
 function hertzNormalForce(delta: number, rEff: number, eStar: number): number {
@@ -549,14 +616,16 @@ function physicsStep(dt: number) {
     }
 
     // Wall-squeeze detection: if a particle is pressed against a wall by another particle, push the other particle away
-    for (const p of particles) {
+    for (let i = 0; i < particles.length; i++) {
+      const p = particles[i];
       const atLeftWall = (p.x - p.radius) < CL + 1;
       const atRightWall = (p.x + p.radius) > CR - 1;
       const atBottom = (p.y + p.radius) > CB - 1;
       if (!atLeftWall && !atRightWall && !atBottom) continue;
 
-      for (const q of particles) {
-        if (p === q) continue;
+      const nearby = spatialHash.findNearbyIndices(particles, i, p.radius);
+      for (const j of nearby) {
+        const q = particles[j];
         const dx = q.x - p.x;
         const dy = q.y - p.y;
         const distSq = dx * dx + dy * dy;
@@ -702,14 +771,21 @@ function drop() {
   const r = LEVELS[currentLevel].radius;
   const jitter = (Math.random() - 0.5) * 2;
   const cx = Math.max(CL + r + 2, Math.min(CR - r - 2, dropX + jitter));
+  lastDroppedLevel = currentLevel;
   const p = createParticle(cx, DROP_Y, currentLevel);
   particles.push(p);
   canDrop = false;
   lastDroppedId = p.id;
+  lastDropAnchorX = cx;
+  lastDropAnchorY = DROP_Y;
+  stepsSinceDrop = 0;
   currentLevel = nextLevel;
   nextLevel = getRandomLevel();
   updateNextPreview();
   chartDirty = true;
+  lastStepBonus = 0;
+  updateHudStats();
+  vibrate(12);
 }
 
 function restart() {
@@ -731,6 +807,12 @@ function restart() {
   comboTimer = 0;
   mergeCount = 0;
   lastDroppedId = null;
+  lastDroppedLevel = 0;
+  lastDropAnchorX = GAME_W / 2;
+  lastDropAnchorY = DROP_Y;
+  totalSimSteps = 0;
+  stepsSinceDrop = 0;
+  lastStepBonus = 0;
 
   scoreEl.textContent = '0';
   gameOverEl.style.display = 'none';
@@ -739,6 +821,7 @@ function restart() {
   highScoreEl.textContent = `今日のハイスコア / Todays HighScore: ${highScore}`;
   updateNextPreview();
   chartDirty = true;
+  updateHudStats();
 }
 
 // ================================================================
@@ -1149,35 +1232,55 @@ function updateNextPreview() {
 // ================================================================
 
 function setupInput() {
-  gameCanvas.addEventListener('mousemove', (e) => {
-    const rect = gameCanvas.getBoundingClientRect();
-    dropX = (e.clientX - rect.left) * (GAME_W / rect.width);
+  updateCanvasRect();
+  if (typeof ResizeObserver !== 'undefined') {
+    new ResizeObserver(() => updateCanvasRect()).observe(gameCanvas);
+  }
+  window.addEventListener('resize', () => {
+    updateCanvasRect();
+    updateLayoutHint();
+  });
+  window.addEventListener('orientationchange', () => {
+    updateCanvasRect();
+    updateLayoutHint();
   });
 
-  gameCanvas.addEventListener('click', () => drop());
-
-  gameCanvas.addEventListener('touchmove', (e) => {
-    e.preventDefault();
-    const rect = gameCanvas.getBoundingClientRect();
-    dropX = (e.touches[0].clientX - rect.left) * (GAME_W / rect.width);
-  }, { passive: false });
-
-  gameCanvas.addEventListener('touchend', (e) => {
-    e.preventDefault();
-    drop();
+  gameCanvas.addEventListener('pointerdown', (e) => {
+    if (!e.isPrimary) return;
+    updateCanvasRect();
+    activePointerId = e.pointerId;
+    pointerStartX = e.clientX;
+    pointerDragDistance = 0;
+    setDropFromClientX(e.clientX);
+    gameCanvas.setPointerCapture(e.pointerId);
   });
 
-  const keys = new Set<string>();
+  gameCanvas.addEventListener('pointermove', (e) => {
+    if (activePointerId !== null && e.pointerId === activePointerId) {
+      pointerDragDistance = Math.max(pointerDragDistance, Math.abs(e.clientX - pointerStartX));
+    }
+    setDropFromClientX(e.clientX);
+  });
+
+  gameCanvas.addEventListener('pointerup', (e) => {
+    if (activePointerId !== e.pointerId) return;
+    setDropFromClientX(e.clientX);
+    const shouldDrop = e.pointerType !== 'mouse' || pointerDragDistance < 8;
+    activePointerId = null;
+    pointerDragDistance = 0;
+    if (shouldDrop) drop();
+  });
+
+  gameCanvas.addEventListener('pointercancel', () => {
+    activePointerId = null;
+    pointerDragDistance = 0;
+  });
+
   document.addEventListener('keydown', (e) => {
-    keys.add(e.key);
+    pressedKeys.add(e.key);
     if (e.key === ' ') { e.preventDefault(); drop(); }
   });
-  document.addEventListener('keyup', (e) => keys.delete(e.key));
-
-  setInterval(() => {
-    if (keys.has('ArrowLeft') || keys.has('a') || keys.has('A')) dropX = Math.max(CL + 20, dropX - 6);
-    if (keys.has('ArrowRight') || keys.has('d') || keys.has('D')) dropX = Math.min(CR - 20, dropX + 6);
-  }, 16);
+  document.addEventListener('keyup', (e) => pressedKeys.delete(e.key));
 
   restartBtn.addEventListener('click', restart);
   document.getElementById('score-restart-btn')!.addEventListener('click', restart);
@@ -1193,6 +1296,7 @@ function setupInput() {
     btnHooke.classList.remove('active');
   });
   chkForces.addEventListener('change', () => { showForceChains = chkForces.checked; });
+  updateLayoutHint();
 }
 
 // ================================================================
@@ -1201,10 +1305,14 @@ function setupInput() {
 
 function update() {
   if (!gameOver) {
+    if (pressedKeys.has('ArrowLeft') || pressedKeys.has('a') || pressedKeys.has('A')) dropX = Math.max(CL + 20, dropX - 6);
+    if (pressedKeys.has('ArrowRight') || pressedKeys.has('d') || pressedKeys.has('D')) dropX = Math.min(CR - 20, dropX + 6);
     const dt = (1 / 60) / SUB_STEPS;
     for (let i = 0; i < SUB_STEPS; i++) {
       physicsStep(dt);
     }
+    totalSimSteps += SUB_STEPS;
+    if (!canDrop) stepsSinceDrop += SUB_STEPS;
     processMerges();
     checkGameOver();
     for (const p of particles) {
@@ -1216,8 +1324,7 @@ function update() {
       const dp = particles.find(p => p.id === lastDroppedId);
       if (!dp) {
         // Particle was consumed by merge — allow next drop
-        canDrop = true;
-        lastDroppedId = null;
+        releaseDropGate();
       } else {
         const fullyBelowLine = (dp.y - dp.radius) > DANGER_Y;
         let hasContact = false;
@@ -1232,8 +1339,7 @@ function update() {
           }
         }
         if (fullyBelowLine || hasContact) {
-          canDrop = true;
-          lastDroppedId = null;
+          releaseDropGate(dp);
         }
       }
     }
@@ -1269,6 +1375,8 @@ function update() {
     lastChartFrame = Date.now();
   }
 
+  if ((totalSimSteps & 31) === 0) updateHudStats();
+
   if (gameOver && dangerTimer > 0) dangerTimer--;
 
   requestAnimationFrame(update);
@@ -1283,6 +1391,7 @@ async function main() {
   currentLevel = getRandomLevel();
   nextLevel = getRandomLevel();
   updateNextPreview();
+  updateHudStats();
   setupInput();
   update();
 }

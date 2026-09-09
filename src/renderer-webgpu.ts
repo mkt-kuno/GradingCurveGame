@@ -99,6 +99,7 @@ export class WebGPURenderer {
   overlayCtx: CanvasRenderingContext2D;
   maxInst = 512;
   circleVertCount: number;
+  private forceChainStride = 1;
 
   constructor(canvas: HTMLCanvasElement, device: GPUDevice) {
     this.device = device;
@@ -122,10 +123,7 @@ export class WebGPURenderer {
     new Float32Array(this.vertexBuffer.getMappedRange()).set(triVerts);
     this.vertexBuffer.unmap();
 
-    this.instanceBuffer = device.createBuffer({
-      size: this.maxInst * 11 * 4,
-      usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
-    });
+    this.instanceBuffer = this.createInstanceBuffer(this.maxInst);
 
     const shaderModule = device.createShaderModule({ code: PARTICLE_WGSL });
 
@@ -165,10 +163,26 @@ export class WebGPURenderer {
     this.overlayCanvas = document.createElement('canvas');
     this.overlayCanvas.width = GAME_W;
     this.overlayCanvas.height = GAME_H;
-    this.overlayCanvas.style.cssText = 'position:absolute;top:0;left:0;pointer-events:none;border-radius:12px;z-index:10';
+    this.overlayCanvas.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;border-radius:12px;z-index:10';
     this.overlayCtx = this.overlayCanvas.getContext('2d')!;
     document.getElementById('game-section')!.style.position = 'relative';
     document.getElementById('game-section')!.appendChild(this.overlayCanvas);
+  }
+
+  private createInstanceBuffer(maxInst: number): GPUBuffer {
+    return this.device.createBuffer({
+      size: maxInst * 11 * 4,
+      usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+    });
+  }
+
+  private ensureInstanceCapacity(count: number) {
+    if (count <= this.maxInst) return;
+    let next = this.maxInst;
+    while (next < count) next *= 2;
+    this.instanceBuffer.destroy();
+    this.maxInst = next;
+    this.instanceBuffer = this.createInstanceBuffer(this.maxInst);
   }
 
   drawFrame(
@@ -199,7 +213,8 @@ export class WebGPURenderer {
       allParticles = [...particles, { x: cx, y: DROP_Y, vx: 0, vy: 0, radius: r, mass: 0, inertia: 0, level: currentLevel, angle: 0, omega: 0, active: false, graceFrames: 0, id: -1 }];
     }
 
-    const cnt = Math.min(allParticles.length, this.maxInst);
+    this.ensureInstanceCapacity(allParticles.length);
+    const cnt = allParticles.length;
     const inst = new Float32Array(cnt * 11);
     for (let i = 0; i < cnt; i++) {
       const p = allParticles[i];
@@ -260,8 +275,13 @@ export class WebGPURenderer {
 
     // Force chains (simplified, no shadowBlur)
     if (showForceChains && contactVis.length > 0) {
-      const maxF = Math.max(...contactVis.map(c => c.force), 1);
-      for (const c of contactVis) {
+      this.forceChainStride = contactVis.length > 240 ? Math.ceil(contactVis.length / 240) : 1;
+      let maxF = 1;
+      for (let i = 0; i < contactVis.length; i += this.forceChainStride) {
+        if (contactVis[i].force > maxF) maxF = contactVis[i].force;
+      }
+      for (let i = 0; i < contactVis.length; i += this.forceChainStride) {
+        const c = contactVis[i];
         const t = Math.min(c.force / maxF, 1);
         const baseR = 8 + t * 24;
         const grad = ctx.createRadialGradient(c.x, c.y, 0, c.x, c.y, baseR);
@@ -286,8 +306,10 @@ export class WebGPURenderer {
 
     // Text for all particles
     if (!gameOver) {
+      const drawLabels = particles.length <= 180;
       for (const p of particles) {
         const info = LEVELS[p.level];
+        if (!drawLabels && p.radius < 80) continue;
         const fontSize = Math.max(8, Math.floor(p.radius * 0.3));
         ctx.save();
         ctx.translate(p.x, p.y);

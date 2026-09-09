@@ -70,4 +70,32 @@ export class SpatialHash {
     pairs.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
     return pairs;
   }
+
+  findNearbyIndices(
+    particles: Array<{ x: number; y: number; radius: number }>,
+    index: number,
+    extraRadius = 0,
+  ): number[] {
+    const p = particles[index];
+    const reach = p.radius + extraRadius;
+    const minCX = Math.floor((p.x - reach) * this.invCell);
+    const maxCX = Math.floor((p.x + reach) * this.invCell);
+    const minCY = Math.floor((p.y - reach) * this.invCell);
+    const maxCY = Math.floor((p.y + reach) * this.invCell);
+    const nearby: number[] = [];
+    const seen = new Set<number>();
+    for (let cx = minCX; cx <= maxCX; cx++) {
+      for (let cy = minCY; cy <= maxCY; cy++) {
+        const cell = this.cells.get(this.hashKey(cx, cy));
+        if (!cell) continue;
+        for (const j of cell) {
+          if (j === index || seen.has(j)) continue;
+          seen.add(j);
+          nearby.push(j);
+        }
+      }
+    }
+    nearby.sort((a, b) => a - b);
+    return nearby;
+  }
 }

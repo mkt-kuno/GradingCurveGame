@@ -16,14 +16,14 @@
 <link rel="icon" href="icons/icon.png" type="image/png">
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
-html,body{height:100%;overflow:hidden}
-body{background:#0a0a1a;color:#eee;font-family:'Segoe UI','Helvetica Neue',sans-serif;display:flex;flex-direction:column;justify-content:flex-start;align-items:center;font-size:16px}
+html,body{height:100%}
+body{background:#0a0a1a;color:#eee;font-family:'Segoe UI','Helvetica Neue',sans-serif;display:flex;flex-direction:column;justify-content:flex-start;align-items:center;font-size:16px;overflow:auto;-webkit-text-size-adjust:100%}
 #scale-wrap{width:1920px;flex-shrink:0;transform-origin:top center;transform:scale(var(--scale,1));display:flex;flex-direction:column;align-items:center;padding:8px;will-change:transform}
 footer{width:100%;text-align:center;padding:12px 0 8px;font-size:24px;color:#444;font-weight:bold}
 #app{display:flex;gap:12px;flex-wrap:wrap;justify-content:center;align-items:flex-start;max-width:1920px;width:100%}
 #left-panel{width:612px;display:flex;flex-direction:column;gap:12px;flex-shrink:0}
 #game-section{position:relative;flex-shrink:0}
-#game-canvas{border-radius:12px;display:block;cursor:crosshair}
+#game-canvas{border-radius:12px;display:block;cursor:crosshair;touch-action:none;width:858px;height:925px;max-width:100%;aspect-ratio:858/925}
 #game-over{display:none;position:absolute;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.78);border-radius:12px;flex-direction:column;justify-content:center;align-items:center;gap:16px;z-index:20}
 #game-over h2{font-size:46px;color:#FF6B00}
 #game-over p{font-size:22px;color:#ccc}
@@ -44,6 +44,12 @@ footer{width:100%;text-align:center;padding:12px 0 8px;font-size:24px;color:#444
 #model-buttons button{flex:1;padding:12px 0;font-size:18px;font-weight:bold;border:2px solid #2a3a5e;background:transparent;color:#888;border-radius:6px;cursor:pointer;transition:all .2s}
 #model-buttons button.active{border-color:#FF6B00;color:#FF6B00;background:rgba(233,69,96,.1)}
 #model-buttons button:hover{border-color:#FF6B00}
+.sub-stats{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:14px}
+.sub-stat{padding:10px 12px;border-radius:8px;background:rgba(255,255,255,.06)}
+.sub-stat-label{font-size:12px;color:#aab}
+.sub-stat-value{font-size:24px;font-weight:bold;color:#fff;margin-top:4px}
+#sim-stats{margin-top:10px;font-size:14px;color:#aab;line-height:1.5}
+#compact-hint{margin-top:8px;font-size:13px;color:#7fa7ff}
 #chk-wrap{display:flex;align-items:center;font-size:18px;color:#aaa;cursor:pointer}
 #chk-forces{accent-color:#FF6B00;margin-right:8px;transform:scale(1.2)}
 #chart-canvas{display:block;border-radius:8px;width:100%}
@@ -56,6 +62,23 @@ footer{width:100%;text-align:center;padding:12px 0 8px;font-size:24px;color:#444
 .sc-cell span{font-size:12px;opacity:.75}
 #controls-panel p{font-size:22px;color:#888;line-height:1.8}
 @media(max-width:1200px){#app{flex-direction:column;align-items:center}#left-panel,#right-panel{width:100%;max-width:800px}}
+body.compact{overflow:auto}
+body.compact #scale-wrap{width:100%;transform:none;padding:8px 8px 16px}
+body.compact #app{display:grid;grid-template-columns:1fr;max-width:560px;gap:8px}
+body.compact #left-panel{display:none}
+body.compact #game-section{width:100%}
+body.compact #game-canvas{width:100%;height:auto;cursor:default}
+body.compact #right-panel{width:100%;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+body.compact #right-panel .panel{padding:12px}
+body.compact #score-value{font-size:48px}
+body.compact .panel h3{font-size:22px;margin-bottom:8px}
+body.compact #next-preview{gap:10px}
+body.compact #next-canvas{width:72px;height:72px}
+body.compact #controls-panel,body.compact #model-panel{grid-column:1/-1}
+body.compact #controls-panel p,body.compact #grading-summary p{font-size:16px}
+body.compact #compact-hint{display:block}
+body:not(.compact) #compact-hint{display:none}
+@media(max-width:900px),(max-height:760px){body{overflow:auto}}
 </style>
 </head>
 <body>
@@ -90,11 +113,17 @@ footer{width:100%;text-align:center;padding:12px 0 8px;font-size:24px;color:#444
     </div>
   </div>
   <div id="right-panel">
-    <div class="panel">
+    <div class="panel" id="score-panel">
       <h3>スコア / Score</h3>
       <div id="score-value">0</div>
       <div id="high-score">今日のハイスコア / Todays HighScore: 0</div>
       <button id="score-restart-btn" style="margin-top:12px;width:100%;padding:10px 0;font-size:16px;font-weight:bold;background:#FF6B00;color:#fff;border:none;border-radius:6px;cursor:pointer;transition:background .2s">リセット / Reset</button>
+      <div class="sub-stats">
+        <div class="sub-stat"><div class="sub-stat-label">Sim Steps</div><div class="sub-stat-value" id="step-value">0</div></div>
+        <div class="sub-stat"><div class="sub-stat-label">Step Bonus</div><div class="sub-stat-value" id="step-bonus">0</div></div>
+      </div>
+      <div id="sim-stats">N=0  Merge=0  Renderer=Canvas2D</div>
+      <div id="compact-hint"></div>
     </div>
     <div class="panel">
       <h3>次の粒子 / Next</h3>
@@ -103,7 +132,7 @@ footer{width:100%;text-align:center;padding:12px 0 8px;font-size:24px;color:#444
         <span id="next-name"></span>
       </div>
     </div>
-    <div class="panel">
+    <div class="panel" id="model-panel">
       <h3>接触モデル / Model</h3>
       <div id="model-buttons">
         <button id="btn-hooke" class="active">Hooke</button>
@@ -134,7 +163,16 @@ footer{width:100%;text-align:center;padding:12px 0 8px;font-size:24px;color:#444
 })();
 (function(){
   var baseW=1920,baseH=1000;
+  function useCompact(){
+    return window.innerWidth<=900||window.innerHeight<=760;
+  }
   function fit(){
+    var compact=useCompact();
+    document.body.classList.toggle('compact',compact);
+    if(compact){
+      document.documentElement.style.setProperty('--scale',1);
+      return;
+    }
     var sx=window.innerWidth/baseW;
     var sy=window.innerHeight/baseH;
     var s=Math.min(sx,sy);
