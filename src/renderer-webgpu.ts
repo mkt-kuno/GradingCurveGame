@@ -210,7 +210,6 @@ export class WebGPURenderer {
     showForceChains: boolean,
     dangerAlpha: number,
     time: number,
-    rendererName: string,
     profile: RenderProfile,
   ) {
     const device = this.device;
@@ -399,7 +398,7 @@ export class WebGPURenderer {
     ctx.textAlign = 'left';
     ctx.fillStyle = 'rgba(255,255,255,0.4)';
     const modelText = contactModel === 'hertz' ? 'Hertz Contact' : 'Hooke Contact';
-    ctx.fillText(`${modelText}  N=${particles.length}  ${rendererName}`, CL + 4, 14);
+    ctx.fillText(modelText, CL + 4, 14);
   }
 
   dispose() {
