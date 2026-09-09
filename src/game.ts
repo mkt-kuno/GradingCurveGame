@@ -118,13 +118,9 @@ const paramsEl = document.getElementById('grading-params')!;
 const btnHooke = document.getElementById('btn-hooke') as HTMLButtonElement;
 const btnHertz = document.getElementById('btn-hertz') as HTMLButtonElement;
 const chkForces = document.getElementById('chk-forces') as HTMLInputElement;
-const stepValueEl = document.getElementById('step-value')!;
-const stepBonusEl = document.getElementById('step-bonus')!;
-const simStatsEl = document.getElementById('sim-stats')!;
 const compactHintEl = document.getElementById('compact-hint')!;
 const compactScoreEl = document.getElementById('compact-score')!;
 const compactNextEl = document.getElementById('compact-next')!;
-const compactStepBonusEl = document.getElementById('compact-step-bonus')!;
 const compactLeftBtn = document.getElementById('compact-left-btn') as HTMLButtonElement;
 const compactDropBtn = document.getElementById('compact-drop-btn') as HTMLButtonElement;
 const compactRightBtn = document.getElementById('compact-right-btn') as HTMLButtonElement;
@@ -186,10 +182,6 @@ function addScoreToTop(s: number): TopScoreEntry[] {
 }
 
 function updateHudStats() {
-  stepValueEl.textContent = totalSimSteps.toLocaleString();
-  stepBonusEl.textContent = `${lastStepBonus}`;
-  compactStepBonusEl.textContent = `${lastStepBonus}`;
-  simStatsEl.textContent = `N=${particles.length}  Merge=${mergeCount}  Renderer=${rendererName}`;
   compactScoreEl.textContent = score.toLocaleString();
 }
 

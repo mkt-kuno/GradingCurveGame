@@ -24,7 +24,7 @@ footer{width:100%;text-align:center;padding:12px 0 8px;font-size:24px;color:#444
 #left-panel{width:612px;display:flex;flex-direction:column;gap:12px;flex-shrink:0}
 #game-section{position:relative;flex-shrink:0}
 #game-canvas{border-radius:12px;display:block;cursor:crosshair;touch-action:none;width:858px;height:925px;max-width:100%;aspect-ratio:858/925}
-#compact-overlay{display:none;position:absolute;top:10px;left:10px;right:10px;z-index:15;pointer-events:none;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+#compact-overlay{display:none;position:absolute;top:10px;left:10px;right:10px;z-index:15;pointer-events:none;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
 .compact-chip{background:rgba(10,10,26,.78);backdrop-filter:blur(8px);border:1px solid rgba(127,167,255,.2);border-radius:12px;padding:8px 10px;min-width:0}
 .compact-chip span{display:block;font-size:11px;color:#aab}
 .compact-chip strong{display:block;margin-top:3px;font-size:18px;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -112,7 +112,6 @@ body:not(.compact) #compact-hint{display:none}
     <div id="compact-overlay" aria-hidden="true">
       <div class="compact-chip"><span>Score</span><strong id="compact-score">0</strong></div>
       <div class="compact-chip"><span>Next</span><strong id="compact-next">-</strong></div>
-      <div class="compact-chip"><span>Step Bonus</span><strong id="compact-step-bonus">0</strong></div>
     </div>
     <div id="game-over">
       <h2>GAME OVER</h2>
@@ -135,11 +134,6 @@ body:not(.compact) #compact-hint{display:none}
       <div id="score-value">0</div>
       <div id="high-score">今日のハイスコア / Todays HighScore: 0</div>
       <button id="score-restart-btn" style="margin-top:12px;width:100%;padding:10px 0;font-size:16px;font-weight:bold;background:#FF6B00;color:#fff;border:none;border-radius:6px;cursor:pointer;transition:background .2s">リセット / Reset</button>
-      <div class="sub-stats">
-        <div class="sub-stat"><div class="sub-stat-label">Sim Steps</div><div class="sub-stat-value" id="step-value">0</div></div>
-        <div class="sub-stat"><div class="sub-stat-label">Step Bonus</div><div class="sub-stat-value" id="step-bonus">0</div></div>
-      </div>
-      <div id="sim-stats">N=0  Merge=0  Renderer=Canvas2D</div>
       <div id="compact-hint"></div>
     </div>
     <div class="panel">
