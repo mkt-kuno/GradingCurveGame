@@ -11,6 +11,14 @@ interface ContactVis { x: number; y: number; force: number; }
 interface Effect { x: number; y: number; r: number; alpha: number; color: string; }
 interface ScorePopup { x: number; y: number; text: string; timer: number; }
 interface Particle { x: number; y: number; vx: number; vy: number; radius: number; mass: number; inertia: number; level: number; angle: number; omega: number; active: boolean; graceFrames: number; id: number; }
+interface RenderProfile {
+  forceChainStride: number;
+  effectiveForceChains: boolean;
+  drawParticleLabels: boolean;
+  minLabelRadius: number;
+  maxScorePopups: number;
+  showDropGuide: boolean;
+}
 
 function hexToRGB(hex: string): [number, number, number] {
   const n = parseInt(hex.slice(1), 16);
@@ -201,6 +209,7 @@ export class WebGPURenderer {
     dangerAlpha: number,
     time: number,
     rendererName: string,
+    profile: RenderProfile,
   ) {
     const device = this.device;
     const ctx = this.overlayCtx;
@@ -274,8 +283,8 @@ export class WebGPURenderer {
     ctx.fillText('DEAD LINE', CR - 4, DANGER_Y - 4);
 
     // Force chains (simplified, no shadowBlur)
-    if (showForceChains && contactVis.length > 0) {
-      this.forceChainStride = contactVis.length > 240 ? Math.ceil(contactVis.length / 240) : 1;
+    if (showForceChains && profile.effectiveForceChains && contactVis.length > 0) {
+      this.forceChainStride = Math.max(1, profile.forceChainStride);
       let maxF = 1;
       for (let i = 0; i < contactVis.length; i += this.forceChainStride) {
         if (contactVis[i].force > maxF) maxF = contactVis[i].force;
@@ -306,10 +315,9 @@ export class WebGPURenderer {
 
     // Text for all particles
     if (!gameOver) {
-      const drawLabels = particles.length <= 180;
       for (const p of particles) {
         const info = LEVELS[p.level];
-        if (!drawLabels && p.radius < 80) continue;
+        if (!profile.drawParticleLabels && p.radius < profile.minLabelRadius) continue;
         const fontSize = Math.max(8, Math.floor(p.radius * 0.3));
         ctx.save();
         ctx.translate(p.x, p.y);
@@ -340,7 +348,9 @@ export class WebGPURenderer {
     }
 
     // Score popups
-    for (const sp of scorePopups) {
+    const popupStart = Math.max(0, scorePopups.length - profile.maxScorePopups);
+    for (let i = popupStart; i < scorePopups.length; i++) {
+      const sp = scorePopups[i];
       const alpha = sp.timer / 60;
       const sz = 14 + (1 - alpha) * 8;
       ctx.font = `bold ${sz}px sans-serif`;
@@ -371,13 +381,15 @@ export class WebGPURenderer {
     if (!gameOver && canDrop) {
       const r = LEVELS[currentLevel].radius;
       const cx = Math.max(CL + r + 2, Math.min(CR - r - 2, dropX));
-      ctx.strokeStyle = 'rgba(255,255,255,0.12)';
-      ctx.lineWidth = 1;
-      ctx.setLineDash([4, 4]);
-      ctx.beginPath();
-      ctx.moveTo(cx, DROP_Y + r); ctx.lineTo(cx, CB);
-      ctx.stroke();
-      ctx.setLineDash([]);
+      if (profile.showDropGuide) {
+        ctx.strokeStyle = 'rgba(255,255,255,0.12)';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([4, 4]);
+        ctx.beginPath();
+        ctx.moveTo(cx, DROP_Y + r); ctx.lineTo(cx, CB);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
     }
 
     // Status line

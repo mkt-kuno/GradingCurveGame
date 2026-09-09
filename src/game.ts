@@ -39,6 +39,17 @@ interface Particle {
 interface ContactVis { x: number; y: number; force: number; }
 interface Effect { x: number; y: number; r: number; alpha: number; color: string; }
 interface ScorePopup { x: number; y: number; text: string; timer: number; }
+interface PerformanceProfile {
+  compact: boolean;
+  correctionIterations: number;
+  forceChainStride: number;
+  effectiveForceChains: boolean;
+  drawParticleLabels: boolean;
+  minLabelRadius: number;
+  maxScorePopups: number;
+  chartIntervalMs: number;
+  showDropGuide: boolean;
+}
 
 type ContactModel = 'hooke' | 'hertz';
 
@@ -70,6 +81,7 @@ let lastDroppedLevel = 0;
 let lastDropAnchorX = GAME_W / 2;
 let lastDropAnchorY = DROP_Y;
 let totalSimSteps = 0;
+let simStepSerial = 0;
 let stepsSinceDrop = 0;
 let lastStepBonus = 0;
 
@@ -110,12 +122,24 @@ const stepValueEl = document.getElementById('step-value')!;
 const stepBonusEl = document.getElementById('step-bonus')!;
 const simStatsEl = document.getElementById('sim-stats')!;
 const compactHintEl = document.getElementById('compact-hint')!;
+const compactScoreEl = document.getElementById('compact-score')!;
+const compactNextEl = document.getElementById('compact-next')!;
+const compactStepBonusEl = document.getElementById('compact-step-bonus')!;
+const compactLeftBtn = document.getElementById('compact-left-btn') as HTMLButtonElement;
+const compactDropBtn = document.getElementById('compact-drop-btn') as HTMLButtonElement;
+const compactRightBtn = document.getElementById('compact-right-btn') as HTMLButtonElement;
+const compactModelBtn = document.getElementById('compact-model-btn') as HTMLButtonElement;
+const compactForceBtn = document.getElementById('compact-force-btn') as HTMLButtonElement;
 
 const pressedKeys = new Set<string>();
 let cachedCanvasRect = new DOMRect(0, 0, GAME_W, GAME_H);
 let activePointerId: number | null = null;
 let pointerStartX = 0;
+let pointerStartY = 0;
 let pointerDragDistance = 0;
+let pointerVerticalDistance = 0;
+let pointerSwipeDropTriggered = false;
+let compactMoveDir = 0;
 
 function getTodayKey(): string {
   const d = new Date();
@@ -164,13 +188,61 @@ function addScoreToTop(s: number): TopScoreEntry[] {
 function updateHudStats() {
   stepValueEl.textContent = totalSimSteps.toLocaleString();
   stepBonusEl.textContent = `${lastStepBonus}`;
+  compactStepBonusEl.textContent = `${lastStepBonus}`;
   simStatsEl.textContent = `N=${particles.length}  Merge=${mergeCount}  Renderer=${rendererName}`;
+  compactScoreEl.textContent = score.toLocaleString();
 }
 
 function updateLayoutHint() {
   compactHintEl.textContent = window.matchMedia('(max-width: 900px), (max-height: 760px)').matches
     ? 'Compact mobile layout active'
     : 'Desktop layout active';
+}
+
+function getPerformanceProfile(): PerformanceProfile {
+  const compact = document.body.classList.contains('compact');
+  const n = particles.length;
+  const extreme = compact || n >= 220;
+  const heavy = n >= 140;
+  return {
+    compact,
+    correctionIterations: extreme ? 1 : heavy ? 2 : 3,
+    forceChainStride: n >= 260 ? 6 : n >= 180 ? 4 : n >= 120 ? 2 : 1,
+    effectiveForceChains: showForceChains && !(compact && n >= 80),
+    drawParticleLabels: !compact && n <= 180,
+    minLabelRadius: compact || n > 180 ? 80 : 0,
+    maxScorePopups: compact ? 6 : n >= 180 ? 8 : 12,
+    chartIntervalMs: compact ? (n >= 120 ? 1400 : 900) : n >= 200 ? 1200 : n >= 120 ? 800 : 450,
+    showDropGuide: !compact && n < 220,
+  };
+}
+
+function updateScoreDisplays() {
+  scoreEl.textContent = score.toString();
+  compactScoreEl.textContent = score.toLocaleString();
+}
+
+function syncControlState() {
+  btnHooke.classList.toggle('active', contactModel === 'hooke');
+  btnHertz.classList.toggle('active', contactModel === 'hertz');
+  compactModelBtn.textContent = contactModel === 'hertz' ? 'HERTZ' : 'HOOKE';
+  compactModelBtn.classList.toggle('is-active', contactModel === 'hertz');
+  chkForces.checked = showForceChains;
+  compactForceBtn.textContent = showForceChains ? 'CHAIN ON' : 'CHAIN OFF';
+  compactForceBtn.classList.toggle('is-active', showForceChains);
+}
+
+function setContactModel(model: ContactModel) {
+  contactModel = model;
+  syncControlState();
+}
+
+function pushScorePopup(popup: ScorePopup) {
+  const maxPopups = getPerformanceProfile().maxScorePopups;
+  if (scorePopups.length >= maxPopups) {
+    scorePopups.splice(0, scorePopups.length - maxPopups + 1);
+  }
+  scorePopups.push(popup);
 }
 
 let highScore = loadHighScore();
@@ -188,7 +260,7 @@ async function initRenderer() {
       if (adapter) {
         const device = await adapter.requestDevice();
         gpuRenderer = new WebGPURenderer(gameCanvas, device);
-        rendererName = 'WebGPU Enable';
+        rendererName = 'WebGPU Enabled';
         return;
       }
     }
@@ -347,10 +419,10 @@ function releaseDropGate(anchor?: { x: number; y: number }) {
   if (bonus > 0) {
     score += bonus;
     lastStepBonus = bonus;
-    scoreEl.textContent = score.toString();
+    updateScoreDisplays();
     const x = anchor?.x ?? lastDropAnchorX;
     const y = anchor?.y ?? lastDropAnchorY;
-    scorePopups.push({ x, y, text: `STEP +${bonus}`, timer: 55 });
+    pushScorePopup({ x, y, text: `STEP +${bonus}`, timer: 55 });
   } else {
     lastStepBonus = 0;
   }
@@ -386,9 +458,10 @@ function computeNormalForce(
   return Math.max(0, fElastic - eta * vn);
 }
 
-function physicsStep(dt: number) {
+function physicsStep(dt: number, profile: PerformanceProfile) {
   const newContactVis: ContactVis[] = [];
   const newPairs = new Set<string>();
+  const collectContactVis = profile.effectiveForceChains;
 
   // Gravity
   for (const p of particles) {
@@ -471,11 +544,13 @@ function physicsStep(dt: number) {
     b.y += ny * corr * (a.mass / totalM);
 
     const fMag = Math.sqrt(fx * fx + fy * fy);
-    newContactVis.push({
-      x: (a.x * b.radius + b.x * a.radius) / (a.radius + b.radius),
-      y: (a.y * b.radius + b.y * a.radius) / (a.radius + b.radius),
-      force: fMag,
-    });
+    if (collectContactVis) {
+      newContactVis.push({
+        x: (a.x * b.radius + b.x * a.radius) / (a.radius + b.radius),
+        y: (a.y * b.radius + b.y * a.radius) / (a.radius + b.radius),
+        force: fMag,
+      });
+    }
 
     const key = pairKey(a.id, b.id);
     newPairs.add(key);
@@ -585,7 +660,7 @@ function physicsStep(dt: number) {
   }
 
   // Iterative position correction (resolve overlaps without adding energy)
-  for (let iter = 0; iter < 3; iter++) {
+  for (let iter = 0; iter < profile.correctionIterations; iter++) {
     // Particle-particle separation
     for (const [i, j] of spatialHash.findPairs(particles)) {
       const a = particles[i];
@@ -615,36 +690,51 @@ function physicsStep(dt: number) {
       if (p.x + p.radius > CR) p.x = CR - p.radius;
     }
 
-    // Wall-squeeze detection: if a particle is pressed against a wall by another particle, push the other particle away
-    for (let i = 0; i < particles.length; i++) {
-      const p = particles[i];
-      const atLeftWall = (p.x - p.radius) < CL + 1;
-      const atRightWall = (p.x + p.radius) > CR - 1;
-      const atBottom = (p.y + p.radius) > CB - 1;
-      if (!atLeftWall && !atRightWall && !atBottom) continue;
+    if ((simStepSerial & 7) === 0) {
+      // Wall-squeeze detection: if a particle is pressed against a wall by another particle, push the other particle away
+      for (let i = 0; i < particles.length; i++) {
+        const p = particles[i];
+        const atLeftWall = (p.x - p.radius) < CL + 1;
+        const atRightWall = (p.x + p.radius) > CR - 1;
+        const atBottom = (p.y + p.radius) > CB - 1;
+        if (!atLeftWall && !atRightWall && !atBottom) continue;
 
-      const nearby = spatialHash.findNearbyIndices(particles, i, p.radius);
-      for (const j of nearby) {
-        const q = particles[j];
-        const dx = q.x - p.x;
-        const dy = q.y - p.y;
-        const distSq = dx * dx + dy * dy;
-        const minDist = p.radius + q.radius;
-        if (distSq >= minDist * minDist) continue;
-        const dist = Math.sqrt(Math.max(distSq, 1e-8));
-        const overlap = minDist - dist;
-        if (overlap <= 0) continue;
-        // Push q away from p (p is against wall, so only move q)
-        const nx = dx / dist;
-        const ny = dy / dist;
-        q.x += nx * overlap * 0.5;
-        q.y += ny * overlap * 0.5;
+        const nearby = spatialHash.findNearbyIndices(particles, i, p.radius);
+        for (const j of nearby) {
+          const q = particles[j];
+          const dx = q.x - p.x;
+          const dy = q.y - p.y;
+          const distSq = dx * dx + dy * dy;
+          const minDist = p.radius + q.radius;
+          if (distSq >= minDist * minDist) continue;
+          const dist = Math.sqrt(Math.max(distSq, 1e-8));
+          const overlap = minDist - dist;
+          if (overlap <= 0) continue;
+          // Push q away from p (p is against wall, so only move q)
+          const nx = dx / dist;
+          const ny = dy / dist;
+          q.x += nx * overlap * 0.5;
+          q.y += ny * overlap * 0.5;
+        }
       }
     }
   }
 
-  contactVis = newContactVis;
+  contactVis = collectContactVis ? newContactVis : [];
   contactedPairs = newPairs;
+  simStepSerial++;
+}
+
+function overlapsAnyParticle(index: number, extra = 0): boolean {
+  const p = particles[index];
+  for (const j of spatialHash.findNearbyIndices(particles, index, extra)) {
+    const q = particles[j];
+    const dx = q.x - p.x;
+    const dy = q.y - p.y;
+    const minDist = p.radius + q.radius + extra;
+    if (dx * dx + dy * dy < minDist * minDist) return true;
+  }
+  return false;
 }
 
 // ================================================================
@@ -667,18 +757,13 @@ function doGameOver() {
 }
 
 function checkGameOver() {
-  for (const p of particles) {
+  for (let i = 0; i < particles.length; i++) {
+    const p = particles[i];
     if (p.graceFrames > 0) continue;
     if (p.active && p.y < DANGER_Y) { doGameOver(); return; }
-    if (!p.active && p.y < DANGER_Y) {
-      for (const q of particles) {
-        if (p === q) continue;
-        const dx = q.x - p.x;
-        const dy = q.y - p.y;
-        const distSq = dx * dx + dy * dy;
-        const minDist = p.radius + q.radius;
-        if (distSq < minDist * minDist) { doGameOver(); return; }
-      }
+    if (!p.active && p.y < DANGER_Y && overlapsAnyParticle(i)) {
+      doGameOver();
+      return;
     }
   }
 }
@@ -690,12 +775,14 @@ function checkGameOver() {
 function processMerges() {
   const consumed = new Set<number>();
   let mergedAny = false;
+  const particleById = new Map<number, Particle>();
+  for (const p of particles) particleById.set(p.id, p);
 
   for (const [idA, idB] of mergeQueue) {
     if (consumed.has(idA) || consumed.has(idB)) continue;
 
-    const a = particles.find(p => p.id === idA);
-    const b = particles.find(p => p.id === idB);
+    const a = particleById.get(idA);
+    const b = particleById.get(idB);
     if (!a || !b || a.level !== b.level) continue;
 
     const mx = (a.x + b.x) / 2;
@@ -705,6 +792,8 @@ function processMerges() {
     consumed.add(idA);
     consumed.add(idB);
     particles = particles.filter(p => p.id !== idA && p.id !== idB);
+    particleById.delete(idA);
+    particleById.delete(idB);
 
     mergedAny = true;
 
@@ -716,8 +805,8 @@ function processMerges() {
       comboTimer = COMBO_TIMEOUT_STEPS;
       effects.push({ x: mx, y: my, r: 10, alpha: 1, color: '#FFFFFF' });
       effects.push({ x: mx, y: my, r: 30, alpha: 0.7, color: '#F5E6CC' });
-      scorePopups.push({ x: mx, y: my, text: `+${pts} MAX!`, timer: 90 });
-      scoreEl.textContent = score.toString();
+      pushScorePopup({ x: mx, y: my, text: `+${pts} MAX!`, timer: 90 });
+      updateScoreDisplays();
       continue;
     }
 
@@ -731,6 +820,7 @@ function processMerges() {
     np.active = a.active || b.active;
     np.graceFrames = GRACE_STEPS;
     particles.push(np);
+    particleById.set(np.id, np);
 
     effects.push({ x: mx, y: my, r: LEVELS[newLevel].radius * 0.3, alpha: 1, color: LEVELS[newLevel].color });
 
@@ -739,8 +829,8 @@ function processMerges() {
     const pts = Math.floor(LEVELS[newLevel].score * (1 + (comboCount - 1) * 0.5));
     score += pts;
     mergeCount++;
-    scorePopups.push({ x: mx, y: my, text: `+${pts}`, timer: 60 });
-    scoreEl.textContent = score.toString();
+    pushScorePopup({ x: mx, y: my, text: `+${pts}`, timer: 60 });
+    updateScoreDisplays();
   }
 
   mergeQueue = [];
@@ -811,16 +901,18 @@ function restart() {
   lastDropAnchorX = GAME_W / 2;
   lastDropAnchorY = DROP_Y;
   totalSimSteps = 0;
+  simStepSerial = 0;
   stepsSinceDrop = 0;
   lastStepBonus = 0;
 
-  scoreEl.textContent = '0';
+  updateScoreDisplays();
   gameOverEl.style.display = 'none';
   topScoresEl.innerHTML = '';
   highScore = loadHighScore();
   highScoreEl.textContent = `今日のハイスコア / Todays HighScore: ${highScore}`;
   updateNextPreview();
   chartDirty = true;
+  syncControlState();
   updateHudStats();
 }
 
@@ -830,7 +922,7 @@ function restart() {
 
 let dangerTimer = 0;
 
-function drawGameCanvas2D() {
+function drawGameCanvas2D(profile: PerformanceProfile) {
   if (!gCtx) return;
   const ctx = gCtx;
   ctx.clearRect(0, 0, GAME_W, GAME_H);
@@ -868,9 +960,13 @@ function drawGameCanvas2D() {
   ctx.fillText('DEAD LINE', CR - 4, DANGER_Y - 4);
 
   // Force chains (optimized, no shadowBlur)
-  if (showForceChains && contactVis.length > 0) {
-    const maxF = Math.max(...contactVis.map(c => c.force), 1);
-    for (const c of contactVis) {
+  if (profile.effectiveForceChains && contactVis.length > 0) {
+    let maxF = 1;
+    for (let i = 0; i < contactVis.length; i += profile.forceChainStride) {
+      if (contactVis[i].force > maxF) maxF = contactVis[i].force;
+    }
+    for (let i = 0; i < contactVis.length; i += profile.forceChainStride) {
+      const c = contactVis[i];
       const t = Math.min(c.force / maxF, 1);
       const baseR = 8 + t * 24;
       const grad = ctx.createRadialGradient(c.x, c.y, 0, c.x, c.y, baseR);
@@ -936,14 +1032,16 @@ function drawGameCanvas2D() {
   if (!gameOver && canDrop) {
     const r = LEVELS[currentLevel].radius;
     const cx = Math.max(CL + r + 2, Math.min(CR - r - 2, dropX));
-    ctx.strokeStyle = 'rgba(255,255,255,0.12)';
-    ctx.lineWidth = 1;
-    ctx.setLineDash([4, 4]);
-    ctx.beginPath();
-    ctx.moveTo(cx, DROP_Y + r);
-    ctx.lineTo(cx, CB);
-    ctx.stroke();
-    ctx.setLineDash([]);
+    if (profile.showDropGuide) {
+      ctx.strokeStyle = 'rgba(255,255,255,0.12)';
+      ctx.lineWidth = 1;
+      ctx.setLineDash([4, 4]);
+      ctx.beginPath();
+      ctx.moveTo(cx, DROP_Y + r);
+      ctx.lineTo(cx, CB);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
     drawParticleCached(ctx, cx, DROP_Y, 0, currentLevel);
   }
 
@@ -1225,6 +1323,7 @@ function updateNextPreview() {
 
   ctx.restore();
   nextNameEl.textContent = `${info.name} (${info.sieve})`;
+  compactNextEl.textContent = info.sieve;
 }
 
 // ================================================================
@@ -1232,6 +1331,22 @@ function updateNextPreview() {
 // ================================================================
 
 function setupInput() {
+  const clearCompactMove = () => {
+    compactMoveDir = 0;
+    compactLeftBtn.classList.remove('is-active');
+    compactRightBtn.classList.remove('is-active');
+  };
+  const bindCompactMoveButton = (button: HTMLButtonElement, dir: number) => {
+    button.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      compactMoveDir = dir;
+      compactLeftBtn.classList.toggle('is-active', dir < 0);
+      compactRightBtn.classList.toggle('is-active', dir > 0);
+    });
+    button.addEventListener('pointerup', clearCompactMove);
+    button.addEventListener('pointercancel', clearCompactMove);
+    button.addEventListener('pointerleave', clearCompactMove);
+  };
   updateCanvasRect();
   if (typeof ResizeObserver !== 'undefined') {
     new ResizeObserver(() => updateCanvasRect()).observe(gameCanvas);
@@ -1250,7 +1365,10 @@ function setupInput() {
     updateCanvasRect();
     activePointerId = e.pointerId;
     pointerStartX = e.clientX;
+    pointerStartY = e.clientY;
     pointerDragDistance = 0;
+    pointerVerticalDistance = 0;
+    pointerSwipeDropTriggered = false;
     setDropFromClientX(e.clientX);
     gameCanvas.setPointerCapture(e.pointerId);
   });
@@ -1258,6 +1376,13 @@ function setupInput() {
   gameCanvas.addEventListener('pointermove', (e) => {
     if (activePointerId !== null && e.pointerId === activePointerId) {
       pointerDragDistance = Math.max(pointerDragDistance, Math.abs(e.clientX - pointerStartX));
+      pointerVerticalDistance = Math.max(pointerVerticalDistance, e.clientY - pointerStartY);
+      if (!pointerSwipeDropTriggered && e.pointerType !== 'mouse' && pointerVerticalDistance > 36 && pointerVerticalDistance > pointerDragDistance) {
+        pointerSwipeDropTriggered = true;
+        activePointerId = null;
+        pointerDragDistance = 0;
+        drop();
+      }
     }
     setDropFromClientX(e.clientX);
   });
@@ -1265,15 +1390,19 @@ function setupInput() {
   gameCanvas.addEventListener('pointerup', (e) => {
     if (activePointerId !== e.pointerId) return;
     setDropFromClientX(e.clientX);
-    const shouldDrop = e.pointerType !== 'mouse' || pointerDragDistance < 8;
+    const shouldDrop = !pointerSwipeDropTriggered && (e.pointerType !== 'mouse' || pointerDragDistance < 8);
     activePointerId = null;
     pointerDragDistance = 0;
+    pointerVerticalDistance = 0;
+    pointerSwipeDropTriggered = false;
     if (shouldDrop) drop();
   });
 
   gameCanvas.addEventListener('pointercancel', () => {
     activePointerId = null;
     pointerDragDistance = 0;
+    pointerVerticalDistance = 0;
+    pointerSwipeDropTriggered = false;
   });
 
   document.addEventListener('keydown', (e) => {
@@ -1285,17 +1414,21 @@ function setupInput() {
   restartBtn.addEventListener('click', restart);
   document.getElementById('score-restart-btn')!.addEventListener('click', restart);
 
-  btnHooke.addEventListener('click', () => {
-    contactModel = 'hooke';
-    btnHooke.classList.add('active');
-    btnHertz.classList.remove('active');
+  btnHooke.addEventListener('click', () => setContactModel('hooke'));
+  btnHertz.addEventListener('click', () => setContactModel('hertz'));
+  chkForces.addEventListener('change', () => {
+    showForceChains = chkForces.checked;
+    syncControlState();
   });
-  btnHertz.addEventListener('click', () => {
-    contactModel = 'hertz';
-    btnHertz.classList.add('active');
-    btnHooke.classList.remove('active');
+  bindCompactMoveButton(compactLeftBtn, -1);
+  bindCompactMoveButton(compactRightBtn, 1);
+  compactDropBtn.addEventListener('click', () => drop());
+  compactModelBtn.addEventListener('click', () => setContactModel(contactModel === 'hooke' ? 'hertz' : 'hooke'));
+  compactForceBtn.addEventListener('click', () => {
+    showForceChains = !showForceChains;
+    syncControlState();
   });
-  chkForces.addEventListener('change', () => { showForceChains = chkForces.checked; });
+  syncControlState();
   updateLayoutHint();
 }
 
@@ -1304,12 +1437,15 @@ function setupInput() {
 // ================================================================
 
 function update() {
+  const profile = getPerformanceProfile();
   if (!gameOver) {
     if (pressedKeys.has('ArrowLeft') || pressedKeys.has('a') || pressedKeys.has('A')) dropX = Math.max(CL + 20, dropX - 6);
     if (pressedKeys.has('ArrowRight') || pressedKeys.has('d') || pressedKeys.has('D')) dropX = Math.min(CR - 20, dropX + 6);
+    if (compactMoveDir < 0) dropX = Math.max(CL + 20, dropX - 10);
+    if (compactMoveDir > 0) dropX = Math.min(CR - 20, dropX + 10);
     const dt = (1 / 60) / SUB_STEPS;
     for (let i = 0; i < SUB_STEPS; i++) {
-      physicsStep(dt);
+      physicsStep(dt, profile);
     }
     totalSimSteps += SUB_STEPS;
     if (!canDrop) stepsSinceDrop += SUB_STEPS;
@@ -1321,23 +1457,14 @@ function update() {
 
     // Check if the last dropped particle has cleared the danger line or touched another particle
     if (!canDrop && lastDroppedId !== null) {
-      const dp = particles.find(p => p.id === lastDroppedId);
-      if (!dp) {
+      const droppedIndex = particles.findIndex(p => p.id === lastDroppedId);
+      if (droppedIndex === -1) {
         // Particle was consumed by merge — allow next drop
         releaseDropGate();
       } else {
+        const dp = particles[droppedIndex];
         const fullyBelowLine = (dp.y - dp.radius) > DANGER_Y;
-        let hasContact = false;
-        if (!fullyBelowLine) {
-          for (const q of particles) {
-            if (q === dp) continue;
-            const dx = q.x - dp.x;
-            const dy = q.y - dp.y;
-            const distSq = dx * dx + dy * dy;
-            const minDist = dp.radius + q.radius + 2; // small tolerance for near-contact
-            if (distSq < minDist * minDist) { hasContact = true; break; }
-          }
-        }
+        const hasContact = !fullyBelowLine && overlapsAnyParticle(droppedIndex, 2);
         if (fullyBelowLine || hasContact) {
           releaseDropGate(dp);
         }
@@ -1363,13 +1490,14 @@ function update() {
       dangerTimer > 0 ? 0.7 + 0.3 * Math.abs(Math.sin(Date.now() / 130)) : 0.6,
       Date.now() / 1000,
       rendererName,
+      profile,
     );
   } else {
-    drawGameCanvas2D();
+    drawGameCanvas2D(profile);
   }
 
   // Chart (throttled)
-  if (chartDirty || (Date.now() - lastChartFrame > 500)) {
+  if (chartDirty || (Date.now() - lastChartFrame > profile.chartIntervalMs)) {
     drawGradingChart();
     chartDirty = false;
     lastChartFrame = Date.now();

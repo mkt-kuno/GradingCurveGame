@@ -24,6 +24,14 @@ footer{width:100%;text-align:center;padding:12px 0 8px;font-size:24px;color:#444
 #left-panel{width:612px;display:flex;flex-direction:column;gap:12px;flex-shrink:0}
 #game-section{position:relative;flex-shrink:0}
 #game-canvas{border-radius:12px;display:block;cursor:crosshair;touch-action:none;width:858px;height:925px;max-width:100%;aspect-ratio:858/925}
+#compact-overlay{display:none;position:absolute;top:10px;left:10px;right:10px;z-index:15;pointer-events:none;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.compact-chip{background:rgba(10,10,26,.78);backdrop-filter:blur(8px);border:1px solid rgba(127,167,255,.2);border-radius:12px;padding:8px 10px;min-width:0}
+.compact-chip span{display:block;font-size:11px;color:#aab}
+.compact-chip strong{display:block;margin-top:3px;font-size:18px;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#compact-toolbar{display:none;gap:8px;grid-template-columns:repeat(5,minmax(0,1fr));margin-top:8px}
+#compact-toolbar button{min-height:52px;padding:8px 6px;font-size:15px;font-weight:700;background:#16213e;color:#fff;border:1px solid #2a3a5e;border-radius:12px;touch-action:manipulation}
+#compact-toolbar button.is-active{border-color:#FF6B00;color:#FFB366;background:rgba(255,107,0,.12)}
+#compact-help{display:none;margin-top:8px;padding:10px 12px;border-radius:12px;background:#16213e;font-size:13px;line-height:1.5;color:#ccd}
 #game-over{display:none;position:absolute;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.78);border-radius:12px;flex-direction:column;justify-content:center;align-items:center;gap:16px;z-index:20}
 #game-over h2{font-size:46px;color:#FF6B00}
 #game-over p{font-size:22px;color:#ccc}
@@ -68,14 +76,10 @@ body.compact #app{display:grid;grid-template-columns:1fr;max-width:560px;gap:8px
 body.compact #left-panel{display:none}
 body.compact #game-section{width:100%}
 body.compact #game-canvas{width:100%;height:auto;cursor:default}
-body.compact #right-panel{width:100%;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
-body.compact #right-panel .panel{padding:12px}
-body.compact #score-value{font-size:48px}
-body.compact .panel h3{font-size:22px;margin-bottom:8px}
-body.compact #next-preview{gap:10px}
-body.compact #next-canvas{width:72px;height:72px}
-body.compact #controls-panel,body.compact #model-panel{grid-column:1/-1}
-body.compact #controls-panel p,body.compact #grading-summary p{font-size:16px}
+body.compact #right-panel{display:none}
+body.compact #compact-overlay{display:grid}
+body.compact #compact-toolbar{display:grid}
+body.compact #compact-help{display:block}
 body.compact #compact-hint{display:block}
 body:not(.compact) #compact-hint{display:none}
 @media(max-width:900px),(max-height:760px){body{overflow:auto}}
@@ -105,12 +109,25 @@ body:not(.compact) #compact-hint{display:none}
   </div>
   <div id="game-section">
     <canvas id="game-canvas" width="858" height="925"></canvas>
+    <div id="compact-overlay" aria-hidden="true">
+      <div class="compact-chip"><span>Score</span><strong id="compact-score">0</strong></div>
+      <div class="compact-chip"><span>Next</span><strong id="compact-next">-</strong></div>
+      <div class="compact-chip"><span>Step Bonus</span><strong id="compact-step-bonus">0</strong></div>
+    </div>
     <div id="game-over">
       <h2>GAME OVER</h2>
       <p>最終スコア / FinalScore: <span id="final-score">0</span></p>
       <div id="top-scores"></div>
       <button id="restart-btn">もう一度 / Again</button>
     </div>
+    <div id="compact-toolbar">
+      <button id="compact-left-btn" type="button">◀ LEFT</button>
+      <button id="compact-drop-btn" type="button">DROP</button>
+      <button id="compact-right-btn" type="button">RIGHT ▶</button>
+      <button id="compact-model-btn" type="button">Hooke</button>
+      <button id="compact-force-btn" type="button">CHAIN ON</button>
+    </div>
+    <div id="compact-help">Tap: drop / Drag: aim / Swipe down: quick drop / Press buttons: move・model・chain</div>
   </div>
   <div id="right-panel">
     <div class="panel" id="score-panel">
