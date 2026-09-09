@@ -11,6 +11,14 @@ interface ContactVis { x: number; y: number; force: number; }
 interface Effect { x: number; y: number; r: number; alpha: number; color: string; }
 interface ScorePopup { x: number; y: number; text: string; timer: number; }
 interface Particle { x: number; y: number; vx: number; vy: number; radius: number; mass: number; inertia: number; level: number; angle: number; omega: number; active: boolean; graceFrames: number; id: number; }
+interface RenderProfile {
+  forceChainStride: number;
+  effectiveForceChains: boolean;
+  drawParticleLabels: boolean;
+  minLabelRadius: number;
+  maxScorePopups: number;
+  showDropGuide: boolean;
+}
 
 function hexToRGB(hex: string): [number, number, number] {
   const n = parseInt(hex.slice(1), 16);
@@ -88,6 +96,8 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
 `;
 
 const CIRCLE_SEGS = 24;
+const GPU_BUFFER_USAGE_VERTEX = 0x0020;
+const GPU_BUFFER_USAGE_COPY_DST = 0x0008;
 
 export class WebGPURenderer {
   device: GPUDevice;
@@ -99,10 +109,11 @@ export class WebGPURenderer {
   overlayCtx: CanvasRenderingContext2D;
   maxInst = 512;
   circleVertCount: number;
+  private forceChainStride = 1;
 
   constructor(canvas: HTMLCanvasElement, device: GPUDevice) {
     this.device = device;
-    this.context = canvas.getContext('webgpu')!;
+    this.context = canvas.getContext('webgpu') as unknown as GPUCanvasContext;
     this.context.configure({ device, format: 'rgba8unorm', alphaMode: 'premultiplied' });
 
     // Circle mesh
@@ -116,16 +127,13 @@ export class WebGPURenderer {
 
     this.vertexBuffer = device.createBuffer({
       size: triVerts.length * 4,
-      usage: GPUBufferUsage.VERTEX,
+      usage: GPU_BUFFER_USAGE_VERTEX,
       mappedAtCreation: true,
     });
     new Float32Array(this.vertexBuffer.getMappedRange()).set(triVerts);
     this.vertexBuffer.unmap();
 
-    this.instanceBuffer = device.createBuffer({
-      size: this.maxInst * 11 * 4,
-      usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
-    });
+    this.instanceBuffer = this.createInstanceBuffer(this.maxInst);
 
     const shaderModule = device.createShaderModule({ code: PARTICLE_WGSL });
 
@@ -165,10 +173,26 @@ export class WebGPURenderer {
     this.overlayCanvas = document.createElement('canvas');
     this.overlayCanvas.width = GAME_W;
     this.overlayCanvas.height = GAME_H;
-    this.overlayCanvas.style.cssText = 'position:absolute;top:0;left:0;pointer-events:none;border-radius:12px;z-index:10';
+    this.overlayCanvas.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;border-radius:12px;z-index:10';
     this.overlayCtx = this.overlayCanvas.getContext('2d')!;
     document.getElementById('game-section')!.style.position = 'relative';
     document.getElementById('game-section')!.appendChild(this.overlayCanvas);
+  }
+
+  private createInstanceBuffer(maxInst: number): GPUBuffer {
+    return this.device.createBuffer({
+      size: maxInst * 11 * 4,
+      usage: GPU_BUFFER_USAGE_VERTEX | GPU_BUFFER_USAGE_COPY_DST,
+    });
+  }
+
+  private ensureInstanceCapacity(count: number) {
+    if (count <= this.maxInst) return;
+    let next = this.maxInst;
+    while (next < count) next *= 2;
+    this.instanceBuffer.destroy();
+    this.maxInst = next;
+    this.instanceBuffer = this.createInstanceBuffer(this.maxInst);
   }
 
   drawFrame(
@@ -187,6 +211,7 @@ export class WebGPURenderer {
     dangerAlpha: number,
     time: number,
     rendererName: string,
+    profile: RenderProfile,
   ) {
     const device = this.device;
     const ctx = this.overlayCtx;
@@ -199,7 +224,8 @@ export class WebGPURenderer {
       allParticles = [...particles, { x: cx, y: DROP_Y, vx: 0, vy: 0, radius: r, mass: 0, inertia: 0, level: currentLevel, angle: 0, omega: 0, active: false, graceFrames: 0, id: -1 }];
     }
 
-    const cnt = Math.min(allParticles.length, this.maxInst);
+    this.ensureInstanceCapacity(allParticles.length);
+    const cnt = allParticles.length;
     const inst = new Float32Array(cnt * 11);
     for (let i = 0; i < cnt; i++) {
       const p = allParticles[i];
@@ -259,9 +285,14 @@ export class WebGPURenderer {
     ctx.fillText('DEAD LINE', CR - 4, DANGER_Y - 4);
 
     // Force chains (simplified, no shadowBlur)
-    if (showForceChains && contactVis.length > 0) {
-      const maxF = Math.max(...contactVis.map(c => c.force), 1);
-      for (const c of contactVis) {
+    if (showForceChains && profile.effectiveForceChains && contactVis.length > 0) {
+      this.forceChainStride = Math.max(1, profile.forceChainStride);
+      let maxF = 1;
+      for (let i = 0; i < contactVis.length; i += this.forceChainStride) {
+        if (contactVis[i].force > maxF) maxF = contactVis[i].force;
+      }
+      for (let i = 0; i < contactVis.length; i += this.forceChainStride) {
+        const c = contactVis[i];
         const t = Math.min(c.force / maxF, 1);
         const baseR = 8 + t * 24;
         const grad = ctx.createRadialGradient(c.x, c.y, 0, c.x, c.y, baseR);
@@ -288,6 +319,7 @@ export class WebGPURenderer {
     if (!gameOver) {
       for (const p of particles) {
         const info = LEVELS[p.level];
+        if (!profile.drawParticleLabels && p.radius < profile.minLabelRadius) continue;
         const fontSize = Math.max(8, Math.floor(p.radius * 0.3));
         ctx.save();
         ctx.translate(p.x, p.y);
@@ -318,7 +350,9 @@ export class WebGPURenderer {
     }
 
     // Score popups
-    for (const sp of scorePopups) {
+    const popupStart = Math.max(0, scorePopups.length - profile.maxScorePopups);
+    for (let i = popupStart; i < scorePopups.length; i++) {
+      const sp = scorePopups[i];
       const alpha = sp.timer / 60;
       const sz = 14 + (1 - alpha) * 8;
       ctx.font = `bold ${sz}px sans-serif`;
@@ -349,13 +383,15 @@ export class WebGPURenderer {
     if (!gameOver && canDrop) {
       const r = LEVELS[currentLevel].radius;
       const cx = Math.max(CL + r + 2, Math.min(CR - r - 2, dropX));
-      ctx.strokeStyle = 'rgba(255,255,255,0.12)';
-      ctx.lineWidth = 1;
-      ctx.setLineDash([4, 4]);
-      ctx.beginPath();
-      ctx.moveTo(cx, DROP_Y + r); ctx.lineTo(cx, CB);
-      ctx.stroke();
-      ctx.setLineDash([]);
+      if (profile.showDropGuide) {
+        ctx.strokeStyle = 'rgba(255,255,255,0.12)';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([4, 4]);
+        ctx.beginPath();
+        ctx.moveTo(cx, DROP_Y + r); ctx.lineTo(cx, CB);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
     }
 
     // Status line
