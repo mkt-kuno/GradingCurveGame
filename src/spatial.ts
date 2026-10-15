@@ -1,16 +1,12 @@
 // ================================================================
 // Uniform Grid — allocation-free O(N) broad-phase collision detection
 // Fixed Int32Array backing stores; zero GC pressure during physics.
-// Because build() inserts particle indices in ascending order, scanning
-// cells in row-major order yields neighbor candidates grouped
-// ascending, preserving a deterministic Gauss-Seidel iteration order.
+// Neighbor candidates are visited in deterministic order, preserving
+// the Gauss-Seidel-like iteration behavior of the physics step.
 // ================================================================
 
 import { GAME_W, GAME_H } from './constants';
 
-// Largest radius (231px) / cellSize (500px) -> a particle never spans
-// more than 2x2 cells, but keep margin.
-const CELL_SPAN = 2;
 const SLOTS_PER_CELL = 64;
 
 export class UniformGrid {
