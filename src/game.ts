@@ -1,46 +1,31 @@
 // ================================================================
 // 粒度分布ゲーム - 土質工学メロンゲーム
-// DEM Physics + GPU Rendering (WebGPU / Canvas2D fallback)
-// Phase 1: CPU optimizations (spatial hash, no shadowBlur, cache, throttled chart)
-// Phase 3: WebGPU rendering
+// DEM Physics (SoA Float32Array, allocation-free hot loop)
+// Rendering: WebGPU -> WebGL -> Canvas2D
 // ================================================================
 
 import {
-  LEVELS, SIEVE_SIZES, GAME_W, GAME_H, WALL_T, CL, CR, CB, CONTAINER_W, CONTAINER_H,
+  LEVELS, SIEVE_SIZES, GAME_W, GAME_H, WALL_T, CL, CR, CB, CONTAINER_W,
   DROP_Y, DANGER_Y, GRAVITY, ESTAR_PP, ESTAR_PW, KN_PP, KN_PW,
-  MU_PP, MU_PW, REST_PP, REST_PW, MU_ROLL_PP, MU_ROLL_PW,
+  MU_PP, MU_PW, MU_ROLL_PP, MU_ROLL_PW,
   SUB_STEPS, COMBO_TIMEOUT_STEPS, GRACE_STEPS, MAX_DELTA_RATIO, MAX_VEL, MAX_OMEGA, VEL_DAMP, ANG_DAMP,
   BETA_PP, BETA_PW,
 } from './constants';
 
-import { SpatialHash } from './spatial';
+import { UniformGrid } from './spatial';
 import { WebGPURenderer } from './renderer-webgpu';
+import { WebGLRenderer } from './renderer-webgl';
 
 // ================================================================
 // Types
 // ================================================================
-
-interface Particle {
-  id: number;
-  x: number;
-  y: number;
-  vx: number;
-  vy: number;
-  radius: number;
-  mass: number;
-  inertia: number;
-  level: number;
-  angle: number;
-  omega: number;
-  active: boolean;
-  graceFrames: number;
-}
 
 interface ContactVis { x: number; y: number; force: number; }
 interface Effect { x: number; y: number; r: number; alpha: number; color: string; }
 interface ScorePopup { x: number; y: number; text: string; timer: number; }
 interface PerformanceProfile {
   compact: boolean;
+  subSteps: number;
   correctionIterations: number;
   forceChainStride: number;
   effectiveForceChains: boolean;
@@ -52,18 +37,76 @@ interface PerformanceProfile {
 }
 
 type ContactModel = 'hooke' | 'hertz';
+interface AnyRenderer { drawFrame: (...args: any[]) => void; }
+
+// ================================================================
+// Particle Store — Structure of Arrays (f32/i32, zero GC in hot loop)
+// ================================================================
+
+const MAX_PARTICLES = 1024;
+
+const px = new Float32Array(MAX_PARTICLES);
+const py = new Float32Array(MAX_PARTICLES);
+const pvx = new Float32Array(MAX_PARTICLES);
+const pvy = new Float32Array(MAX_PARTICLES);
+const pRadius = new Float32Array(MAX_PARTICLES);
+const pMass = new Float32Array(MAX_PARTICLES);
+const pInertia = new Float32Array(MAX_PARTICLES);
+const pAngle = new Float32Array(MAX_PARTICLES);
+const pOmega = new Float32Array(MAX_PARTICLES);
+const pLevel = new Int32Array(MAX_PARTICLES);
+const pActive = new Int32Array(MAX_PARTICLES);
+const pGrace = new Int32Array(MAX_PARTICLES);
+const pId = new Int32Array(MAX_PARTICLES);
+let pCount = 0;
+let nextId = 0;
+
+function spawnParticle(x: number, y: number, level: number): number {
+  if (pCount >= MAX_PARTICLES) return -1;
+  const i = pCount++;
+  const r = LEVELS[level].radius;
+  const m = r * r * 0.008;
+  px[i] = x; py[i] = y;
+  pvx[i] = 0; pvy[i] = 0;
+  pRadius[i] = r; pMass[i] = m;
+  pInertia[i] = 0.5 * m * r * r;
+  pAngle[i] = 0; pOmega[i] = 0;
+  pLevel[i] = level;
+  pActive[i] = 0; pGrace[i] = 0;
+  pId[i] = nextId++;
+  return i;
+}
+
+/** Swap-remove; returns the index now occupying slot i (re-check it). */
+function removeParticle(i: number) {
+  const last = --pCount;
+  if (i !== last) {
+    px[i] = px[last]; py[i] = py[last];
+    pvx[i] = pvx[last]; pvy[i] = pvy[last];
+    pRadius[i] = pRadius[last]; pMass[i] = pMass[last];
+    pInertia[i] = pInertia[last]; pAngle[i] = pAngle[last];
+    pOmega[i] = pOmega[last]; pLevel[i] = pLevel[last];
+    pActive[i] = pActive[last]; pGrace[i] = pGrace[last];
+    pId[i] = pId[last];
+  }
+}
+
+function findIndexById(id: number): number {
+  for (let i = 0; i < pCount; i++) if (pId[i] === id) return i;
+  return -1;
+}
 
 // ================================================================
 // State
 // ================================================================
 
-let particles: Particle[] = [];
-let nextId = 0;
 let contactVis: ContactVis[] = [];
+let contactVisLen = 0;
 let effects: Effect[] = [];
 let scorePopups: ScorePopup[] = [];
-let mergeQueue: [number, number][] = [];
-let contactedPairs = new Set<string>();
+const mergeQueue = new Int32Array(MAX_PARTICLES * 8); // flattened [idA, idB, ...]
+let mergeQueueLen = 0;
+let contactedPairs = new Set<number>();
 
 let score = 0;
 let currentLevel = 0;
@@ -84,15 +127,19 @@ let totalSimSteps = 0;
 let simStepSerial = 0;
 let stepsSinceDrop = 0;
 
-// Spatial hash
-const spatialHash = new SpatialHash(500);
+const grid = new UniformGrid(500, MAX_PARTICLES);
 
-// Chart dirty flag for throttling
 let chartDirty = true;
 let lastChartFrame = 0;
 
-// Renderer
-let gpuRenderer: WebGPURenderer | null = null;
+// Renderers
+let gpuRenderer: AnyRenderer | null = null; // WebGPU or WebGL
+let rendererKind: 'webgpu' | 'webgl' | 'canvas2d' = 'canvas2d';
+
+// fps-adaptive quality
+let fpsEma = 60;
+let lastFrameTime = 0;
+let qualityTier = 0; // 0 = full, 1 = reduced, 2 = minimal
 
 // ================================================================
 // DOM
@@ -124,6 +171,8 @@ const compactDropBtn = document.getElementById('compact-drop-btn') as HTMLButton
 const compactRightBtn = document.getElementById('compact-right-btn') as HTMLButtonElement;
 const compactModelBtn = document.getElementById('compact-model-btn') as HTMLButtonElement;
 const compactForceBtn = document.getElementById('compact-force-btn') as HTMLButtonElement;
+const bgmEl = document.getElementById('bgm') as HTMLAudioElement;
+const muteBtn = document.getElementById('mute-btn') as HTMLButtonElement;
 
 const pressedKeys = new Set<string>();
 let cachedCanvasRect = new DOMRect(0, 0, GAME_W, GAME_H);
@@ -154,7 +203,7 @@ function saveHighScore(s: number) {
   localStorage.setItem('granularity_highscore', JSON.stringify({ date: getTodayKey(), score: s }));
 }
 
-const APP_VERSION = '3.5.1';
+const APP_VERSION = '3.6.0';
 
 interface TopScoreEntry { date: string; version: string; model: string; score: number; }
 
@@ -179,23 +228,54 @@ function addScoreToTop(s: number): TopScoreEntry[] {
   return top3;
 }
 
+// ================================================================
+// BGM mute (persisted in cookie)
+// ================================================================
+
+function readMuteCookie(): boolean {
+  return /(?:^|;\s*)bgm_muted=1/.test(document.cookie);
+}
+
+function writeMuteCookie(muted: boolean) {
+  const expires = new Date(Date.now() + 365 * 864e5).toUTCString();
+  document.cookie = `bgm_muted=${muted ? 1 : 0}; expires=${expires}; path=/; SameSite=Lax`;
+}
+
+function applyMuteState(muted: boolean) {
+  bgmEl.muted = muted;
+  muteBtn.textContent = muted ? '\u{1F507}' : '\u{1F50A}';
+  muteBtn.classList.toggle('muted', muted);
+  muteBtn.setAttribute('aria-label', muted ? 'Unmute BGM' : 'Mute BGM');
+}
+
+function setupMute() {
+  applyMuteState(readMuteCookie());
+  muteBtn.addEventListener('click', () => {
+    const muted = !bgmEl.muted;
+    writeMuteCookie(muted);
+    applyMuteState(muted);
+  });
+}
+
 function updateHudStats() {
   compactScoreEl.textContent = score.toLocaleString();
 }
 
 function updateLayoutHint() {
-  compactHintEl.textContent = window.matchMedia('(max-width: 900px), (max-height: 760px)').matches
-    ? 'Compact mobile layout active'
-    : 'Desktop layout active';
+  const compact = window.matchMedia('(max-width: 900px), (max-height: 760px)').matches;
+  compactHintEl.textContent = compact
+    ? `Compact mobile layout active (${rendererKind})`
+    : `Desktop layout active (${rendererKind})`;
 }
 
 function getPerformanceProfile(): PerformanceProfile {
   const compact = document.body.classList.contains('compact');
-  const n = particles.length;
-  const extreme = compact || n >= 220;
-  const heavy = n >= 140;
+  const n = pCount;
+  const extreme = compact || n >= 220 || qualityTier >= 2;
+  const heavy = n >= 140 || qualityTier >= 1;
   return {
     compact,
+    subSteps: qualityTier >= 2 ? 8 : qualityTier === 1 ? 12 : SUB_STEPS,
     correctionIterations: extreme ? 1 : heavy ? 2 : 3,
     forceChainStride: n >= 260 ? 6 : n >= 180 ? 4 : n >= 120 ? 2 : 1,
     effectiveForceChains: showForceChains && !(compact && n >= 80),
@@ -205,6 +285,22 @@ function getPerformanceProfile(): PerformanceProfile {
     chartIntervalMs: compact ? (n >= 120 ? 1400 : 900) : n >= 200 ? 1200 : n >= 120 ? 800 : 450,
     showDropGuide: !compact && n < 220,
   };
+}
+
+function updateFpsAdaptation(now: number) {
+  if (lastFrameTime > 0) {
+    const dt = now - lastFrameTime;
+    if (dt > 0 && dt < 500) {
+      const fps = 1000 / dt;
+      fpsEma += (fps - fpsEma) * 0.05;
+    }
+  }
+  lastFrameTime = now;
+  // Adapt once per ~2 seconds
+  if ((totalSimSteps & 127) === 0) {
+    if (fpsEma < 50 && qualityTier < 2) qualityTier++;
+    else if (fpsEma > 58 && qualityTier > 0) qualityTier--;
+  }
 }
 
 function updateScoreDisplays() {
@@ -239,17 +335,17 @@ let highScore = loadHighScore();
 highScoreEl.textContent = `今日のハイスコア / Todays HighScore: ${highScore}`;
 
 // ================================================================
-// Renderer Detection
+// Renderer Detection: WebGPU -> WebGL -> Canvas2D
 // ================================================================
 
 async function initRenderer() {
-  // Try WebGPU first
   try {
     if ('gpu' in navigator) {
       const adapter = await (navigator as any).gpu.requestAdapter();
       if (adapter) {
         const device = await adapter.requestDevice();
         gpuRenderer = new WebGPURenderer(gameCanvas, device);
+        rendererKind = 'webgpu';
         return;
       }
     }
@@ -257,12 +353,21 @@ async function initRenderer() {
     console.log('WebGPU not available:', e);
   }
 
-  // Canvas2D fallback
+  try {
+    initParticleCache();
+    gpuRenderer = new WebGLRenderer(gameCanvas, PARTICLE_CACHE);
+    rendererKind = 'webgl';
+    return;
+  } catch (e) {
+    console.log('WebGL not available:', e);
+  }
+
   gCtx = gameCanvas.getContext('2d')!;
+  rendererKind = 'canvas2d';
 }
 
 // ================================================================
-// Particle Cache (Canvas2D fallback)
+// Particle Sprite Cache (shared by WebGL textures + Canvas2D fallback)
 // ================================================================
 
 const PARTICLE_CACHE: HTMLCanvasElement[] = [];
@@ -304,13 +409,11 @@ function initParticleCache() {
     const cx = size / 2;
     const cy = size / 2;
 
-    // Shadow
     ctx.beginPath();
     ctx.arc(cx + 2, cy + 3, r, 0, Math.PI * 2);
     ctx.fillStyle = 'rgba(0,0,0,0.15)';
     ctx.fill();
 
-    // Gradient
     const grad = ctx.createRadialGradient(cx - r * 0.25, cy - r * 0.25, r * 0.05, cx, cy, r);
     grad.addColorStop(0, lighten(info.color, 35));
     grad.addColorStop(1, info.color);
@@ -322,7 +425,6 @@ function initParticleCache() {
     ctx.lineWidth = 2;
     ctx.stroke();
 
-    // Dots
     const rng = mulberry32(level * 54321 + 7);
     const dotN = Math.min(level * 6 + 4, 27);
     for (let i = 0; i < dotN; i++) {
@@ -349,7 +451,6 @@ function drawParticleCached(ctx: CanvasRenderingContext2D, x: number, y: number,
   ctx.rotate(angle);
   ctx.drawImage(cache, -r - pad, -r - pad);
 
-  // Sieve text
   const fontSize = Math.max(8, Math.floor(r * 0.3));
   ctx.font = `bold ${fontSize}px sans-serif`;
   ctx.textAlign = 'center';
@@ -360,21 +461,11 @@ function drawParticleCached(ctx: CanvasRenderingContext2D, x: number, y: number,
 }
 
 // ================================================================
-// DEM Physics (CPU with spatial hash)
+// DEM Physics (SoA, allocation-free)
 // ================================================================
 
-function createParticle(x: number, y: number, level: number): Particle {
-  const r = LEVELS[level].radius;
-  const m = r * r * 0.008;
-  return {
-    id: nextId++, x, y, vx: 0, vy: 0, radius: r, mass: m,
-    inertia: 0.5 * m * r * r, level, angle: 0, omega: 0,
-    active: false, graceFrames: 0,
-  };
-}
-
-function pairKey(a: number, b: number): string {
-  return a < b ? `${a}_${b}` : `${b}_${a}`;
+function pairKey(a: number, b: number): number {
+  return a < b ? a * 65536 + b : b * 65536 + a;
 }
 
 function clamp(v: number, lo: number, hi: number): number {
@@ -402,14 +493,16 @@ function vibrate(pattern: number | number[]) {
   if (typeof navigator.vibrate === 'function') navigator.vibrate(pattern);
 }
 
-function releaseDropGate(anchor?: { x: number; y: number }) {
+function releaseDropGate(anchorX?: number, anchorY?: number) {
   const bonus = computeStepBonus(stepsSinceDrop, lastDroppedLevel);
   if (bonus > 0) {
     score += bonus;
     updateScoreDisplays();
-    const x = anchor?.x ?? lastDropAnchorX;
-    const y = anchor?.y ?? lastDropAnchorY;
-    pushScorePopup({ x, y, text: `STEP +${bonus}`, timer: 55 });
+    pushScorePopup({
+      x: anchorX ?? lastDropAnchorX,
+      y: anchorY ?? lastDropAnchorY,
+      text: `STEP +${bonus}`, timer: 55,
+    });
   }
   canDrop = true;
   lastDroppedId = null;
@@ -417,308 +510,304 @@ function releaseDropGate(anchor?: { x: number; y: number }) {
   updateHudStats();
 }
 
-function hertzNormalForce(delta: number, rEff: number, eStar: number): number {
-  return (4 / 3) * eStar * Math.sqrt(Math.max(rEff, 0.1)) * Math.pow(Math.max(delta, 0), 1.5);
-}
-
-function hookeNormalForce(delta: number, kn: number): number {
-  return kn * delta;
-}
-
-function computeNormalForce(
-  delta: number, rEff: number, mEff: number, vn: number,
-  eStar: number, kn: number, b: number,
-): number {
-  if (delta <= 0) return 0;
+function computeNormalForcePP(delta: number, rEff: number, mEff: number, vn: number): number {
   let fElastic: number;
   let kEff: number;
   if (contactModel === 'hertz') {
-    fElastic = hertzNormalForce(delta, rEff, eStar);
-    kEff = 2 * eStar * Math.sqrt(Math.max(rEff * delta, 0.01));
+    fElastic = (4 / 3) * ESTAR_PP * Math.sqrt(rEff) * delta * Math.sqrt(delta);
+    kEff = 2 * ESTAR_PP * Math.sqrt(Math.max(rEff * delta, 0.01));
   } else {
-    fElastic = hookeNormalForce(delta, kn);
-    kEff = kn;
+    fElastic = KN_PP * delta;
+    kEff = KN_PP;
   }
-  const eta = 2 * b * Math.sqrt(Math.max(mEff * kEff, 0.001));
-  return Math.max(0, fElastic - eta * vn);
+  const eta = 2 * BETA_PP * Math.sqrt(mEff * kEff);
+  const f = fElastic - eta * vn;
+  return f > 0 ? f : 0;
+}
+
+function computeNormalForcePW(delta: number, radius: number, mass: number, vn: number): number {
+  let fElastic: number;
+  let kEff: number;
+  if (contactModel === 'hertz') {
+    fElastic = (4 / 3) * ESTAR_PW * Math.sqrt(radius) * delta * Math.sqrt(delta);
+    kEff = 2 * ESTAR_PW * Math.sqrt(Math.max(radius * delta, 0.01));
+  } else {
+    fElastic = KN_PW * delta;
+    kEff = KN_PW;
+  }
+  const eta = 2 * BETA_PW * Math.sqrt(mass * kEff);
+  const f = fElastic - eta * vn;
+  return f > 0 ? f : 0;
+}
+
+function tangentialDampPP(delta: number, rEff: number, mEff: number): number {
+  const kT = contactModel === 'hertz'
+    ? 2 * ESTAR_PP * Math.sqrt(Math.max(rEff * delta, 0.01))
+    : KN_PP;
+  return 2 * BETA_PP * Math.sqrt(mEff * kT);
+}
+
+function tangentialDampPW(delta: number, radius: number, mass: number): number {
+  const kT = contactModel === 'hertz'
+    ? 2 * ESTAR_PW * Math.sqrt(Math.max(radius * delta, 0.01))
+    : KN_PW;
+  return 2 * BETA_PW * Math.sqrt(mass * kT);
 }
 
 function physicsStep(dt: number, profile: PerformanceProfile) {
-  const newContactVis: ContactVis[] = [];
-  const newPairs = new Set<string>();
+  const n = pCount;
   const collectContactVis = profile.effectiveForceChains;
+  contactVisLen = 0;
 
   // Gravity
-  for (const p of particles) {
-    p.vy += GRAVITY * dt;
-  }
+  for (let i = 0; i < n; i++) pvy[i] += GRAVITY * dt;
 
-  // Build spatial hash
-  spatialHash.build(particles);
+  grid.build(px, py, pRadius, n);
+  const newPairs = new Set<number>();
+  const pairTotal = grid.collectPairs(px, py, pRadius, n);
 
-  // Particle-Particle contacts via spatial hash
-  for (const [i, j] of spatialHash.findPairs(particles)) {
-    const a = particles[i];
-    const b = particles[j];
+  for (let k = 0; k < pairTotal; k++) {
+    const i = grid.getPairI(k);
+    const j = grid.getPairJ(k);
 
-    const dx = b.x - a.x;
-    const dy = b.y - a.y;
+    const dx = px[j] - px[i];
+    const dy = py[j] - py[i];
     const distSq = dx * dx + dy * dy;
-    const minDist = a.radius + b.radius;
+    const minDist = pRadius[i] + pRadius[j];
     if (distSq >= minDist * minDist) continue;
 
-    const dist = Math.sqrt(Math.max(distSq, 1e-8));
+    const dist = Math.sqrt(distSq > 1e-8 ? distSq : 1e-8);
     let delta = minDist - dist;
     if (delta <= 0) continue;
 
-    const maxDelta = MAX_DELTA_RATIO * Math.min(a.radius, b.radius);
-    delta = Math.min(delta, maxDelta);
+    const ri = pRadius[i];
+    const rj = pRadius[j];
+    const maxDelta = MAX_DELTA_RATIO * (ri < rj ? ri : rj);
+    if (delta > maxDelta) delta = maxDelta;
 
     const nx = dx / dist;
     const ny = dy / dist;
     const tx = -ny;
     const ty = nx;
 
-    const dvx = b.vx - a.vx;
-    const dvy = b.vy - a.vy;
+    const dvx = pvx[j] - pvx[i];
+    const dvy = pvy[j] - pvy[i];
     const vn = dvx * nx + dvy * ny;
-    const vSlide = (dvx * tx + dvy * ty) - a.omega * a.radius - b.omega * b.radius;
+    const vSlide = (dvx * tx + dvy * ty) - pOmega[i] * ri - pOmega[j] * rj;
 
-    const mEff = (a.mass * b.mass) / (a.mass + b.mass);
-    const rEff = (a.radius * b.radius) / (a.radius + b.radius);
+    const mi = pMass[i];
+    const mj = pMass[j];
+    const mEff = (mi * mj) / (mi + mj);
+    const rEff = (ri * rj) / (ri + rj);
 
-    const fn = computeNormalForce(delta, rEff, mEff, vn, ESTAR_PP, KN_PP, BETA_PP);
-
-    const kTEffPP = contactModel === 'hertz'
-      ? 2 * ESTAR_PP * Math.sqrt(Math.max(rEff * delta, 0.01))
-      : KN_PP;
-    const ftDamp = 2 * BETA_PP * Math.sqrt(Math.max(mEff * kTEffPP, 0.001));
-    const ftMag = Math.min(MU_PP * fn, ftDamp * Math.abs(vSlide));
+    const fn = computeNormalForcePP(delta, rEff, mEff, vn);
+    const ftDamp = tangentialDampPP(delta, rEff, mEff);
+    const ftCap = MU_PP * fn;
+    const ftRaw = ftDamp * Math.abs(vSlide);
+    const ftMag = ftCap < ftRaw ? ftCap : ftRaw;
     const ftSign = vSlide > 0 ? -1 : vSlide < 0 ? 1 : 0;
 
     const fx = fn * nx + ftSign * ftMag * tx;
     const fy = fn * ny + ftSign * ftMag * ty;
 
-    b.vx += (fx / b.mass) * dt;
-    b.vy += (fy / b.mass) * dt;
-    a.vx -= (fx / a.mass) * dt;
-    a.vy -= (fy / a.mass) * dt;
+    pvx[j] += (fx / mj) * dt;
+    pvy[j] += (fy / mj) * dt;
+    pvx[i] -= (fx / mi) * dt;
+    pvy[i] -= (fy / mi) * dt;
 
-    const torqueSign = vSlide > 0 ? 1 : vSlide < 0 ? -1 : 0;
-    const torqueMag = ftMag;
+    const torqueSign = -ftSign;
+    pOmega[i] += (torqueSign * ftMag * ri / pInertia[i]) * dt;
+    pOmega[j] += (torqueSign * ftMag * rj / pInertia[j]) * dt;
 
-    a.omega += (torqueSign * torqueMag * a.radius / a.inertia) * dt;
-    b.omega += (torqueSign * torqueMag * b.radius / b.inertia) * dt;
-
-    // Rolling resistance (Hertz-Mindlin): oppose relative spin at contact
-    const omegaRel = b.omega - a.omega;
-    if (Math.abs(omegaRel) > 1e-6) {
+    // Rolling resistance: oppose relative spin
+    const omegaRel = pOmega[j] - pOmega[i];
+    if (omegaRel > 1e-6 || omegaRel < -1e-6) {
       const tauRoll = MU_ROLL_PP * rEff * fn;
       const rollSign = omegaRel > 0 ? 1 : -1;
-      const maxImpulse = Math.abs(omegaRel) * 0.5 * (a.inertia * b.inertia) / (a.inertia + b.inertia);
+      const ii = pInertia[i];
+      const ij = pInertia[j];
+      const maxImpulse = Math.abs(omegaRel) * 0.5 * (ii * ij) / (ii + ij);
       const rollImpulse = Math.min(tauRoll * dt, maxImpulse);
-      a.omega += rollSign * rollImpulse / a.inertia;
-      b.omega -= rollSign * rollImpulse / b.inertia;
+      pOmega[i] += rollSign * rollImpulse / ii;
+      pOmega[j] -= rollSign * rollImpulse / ij;
     }
 
-    const totalM = a.mass + b.mass;
+    const totalM = mi + mj;
     const corr = delta * 0.2;
-    a.x -= nx * corr * (b.mass / totalM);
-    a.y -= ny * corr * (b.mass / totalM);
-    b.x += nx * corr * (a.mass / totalM);
-    b.y += ny * corr * (a.mass / totalM);
+    px[i] -= nx * corr * (mj / totalM);
+    py[i] -= ny * corr * (mj / totalM);
+    px[j] += nx * corr * (mi / totalM);
+    py[j] += ny * corr * (mi / totalM);
 
-    const fMag = Math.sqrt(fx * fx + fy * fy);
     if (collectContactVis) {
-      newContactVis.push({
-        x: (a.x * b.radius + b.x * a.radius) / (a.radius + b.radius),
-        y: (a.y * b.radius + b.y * a.radius) / (a.radius + b.radius),
-        force: fMag,
-      });
+      let cv: ContactVis;
+      if (contactVisLen < contactVis.length) {
+        cv = contactVis[contactVisLen];
+      } else {
+        cv = { x: 0, y: 0, force: 0 };
+        contactVis.push(cv);
+      }
+      contactVisLen++;
+      cv.x = (px[i] * rj + px[j] * ri) / (ri + rj);
+      cv.y = (py[i] * rj + py[j] * ri) / (ri + rj);
+      cv.force = Math.sqrt(fx * fx + fy * fy);
     }
 
-    const key = pairKey(a.id, b.id);
+    const key = pairKey(pId[i], pId[j]);
     newPairs.add(key);
-    if (!contactedPairs.has(key) && a.level === b.level) {
-      mergeQueue.push([a.id, b.id]);
+    if (!contactedPairs.has(key) && pLevel[i] === pLevel[j] && mergeQueueLen + 2 <= mergeQueue.length) {
+      mergeQueue[mergeQueueLen++] = pId[i];
+      mergeQueue[mergeQueueLen++] = pId[j];
     }
   }
+  if (contactVisLen < contactVis.length) contactVis.length = contactVisLen;
 
   // Wall contacts
-  for (const p of particles) {
+  for (let i = 0; i < n; i++) {
+    const r = pRadius[i];
+    const m = pMass[i];
+
     // Bottom
-    const oBot = p.y + p.radius - CB;
+    const oBot = py[i] + r - CB;
     if (oBot > 0) {
-      const d = Math.min(oBot, MAX_DELTA_RATIO * p.radius);
-      const vn = -p.vy;
-      const fn = computeNormalForce(d, p.radius, p.mass, vn, ESTAR_PW, KN_PW, BETA_PW);
-      p.vy -= (fn / p.mass) * dt;
-      const vSlideBot = p.vx - p.omega * p.radius;
-      {
-        const kTEffW = contactModel === 'hertz'
-          ? 2 * ESTAR_PW * Math.sqrt(Math.max(p.radius * d, 0.01))
-          : KN_PW;
-        const ftDampW = 2 * BETA_PW * Math.sqrt(Math.max(p.mass * kTEffW, 0.001));
-        const ft = Math.min(MU_PW * fn, ftDampW * Math.abs(vSlideBot));
-        const ftDir = vSlideBot > 0 ? 1 : vSlideBot < 0 ? -1 : 0;
-        p.vx -= ftDir * (ft / p.mass) * dt;
-        p.omega += ftDir * (ft * p.radius / p.inertia) * dt;
-      }
-      {
-        const tauR = MU_ROLL_PW * p.radius * fn;
-        const imp = Math.min(tauR * dt, Math.abs(p.omega) * p.inertia * 0.5);
-        if (Math.abs(p.omega) > 1e-6) p.omega -= Math.sign(p.omega) * imp / p.inertia;
-      }
-      p.y = Math.min(p.y, CB - p.radius);
+      const d = Math.min(oBot, MAX_DELTA_RATIO * r);
+      const fn = computeNormalForcePW(d, r, m, -pvy[i]);
+      pvy[i] -= (fn / m) * dt;
+      const vSlide = pvx[i] - pOmega[i] * r;
+      const ft = Math.min(MU_PW * fn, tangentialDampPW(d, r, m) * Math.abs(vSlide));
+      const ftDir = vSlide > 0 ? 1 : vSlide < 0 ? -1 : 0;
+      pvx[i] -= ftDir * (ft / m) * dt;
+      pOmega[i] += ftDir * (ft * r / pInertia[i]) * dt;
+      const tauR = MU_ROLL_PW * r * fn;
+      const imp = Math.min(tauR * dt, Math.abs(pOmega[i]) * pInertia[i] * 0.5);
+      if (Math.abs(pOmega[i]) > 1e-6) pOmega[i] -= Math.sign(pOmega[i]) * imp / pInertia[i];
+      if (py[i] > CB - r) py[i] = CB - r;
     }
 
     // Left
-    const oL = CL - (p.x - p.radius);
+    const oL = CL - (px[i] - r);
     if (oL > 0) {
-      const d = Math.min(oL, MAX_DELTA_RATIO * p.radius);
-      const vn = p.vx;
-      const fn = computeNormalForce(d, p.radius, p.mass, vn, ESTAR_PW, KN_PW, BETA_PW);
-      p.vx += (fn / p.mass) * dt;
-      const vSlideL = p.vy - p.omega * p.radius;
-      {
-        const kTEffW = contactModel === 'hertz'
-          ? 2 * ESTAR_PW * Math.sqrt(Math.max(p.radius * d, 0.01))
-          : KN_PW;
-        const ftDampW = 2 * BETA_PW * Math.sqrt(Math.max(p.mass * kTEffW, 0.001));
-        const ft = Math.min(MU_PW * fn, ftDampW * Math.abs(vSlideL));
-        const ftDir = vSlideL > 0 ? 1 : vSlideL < 0 ? -1 : 0;
-        p.vy -= ftDir * (ft / p.mass) * dt;
-        p.omega += ftDir * (ft * p.radius / p.inertia) * dt;
-      }
-      {
-        const tauR = MU_ROLL_PW * p.radius * fn;
-        const imp = Math.min(tauR * dt, Math.abs(p.omega) * p.inertia * 0.5);
-        if (Math.abs(p.omega) > 1e-6) p.omega -= Math.sign(p.omega) * imp / p.inertia;
-      }
-      p.x = Math.max(p.x, CL + p.radius);
+      const d = Math.min(oL, MAX_DELTA_RATIO * r);
+      const fn = computeNormalForcePW(d, r, m, pvx[i]);
+      pvx[i] += (fn / m) * dt;
+      const vSlide = pvy[i] - pOmega[i] * r;
+      const ft = Math.min(MU_PW * fn, tangentialDampPW(d, r, m) * Math.abs(vSlide));
+      const ftDir = vSlide > 0 ? 1 : vSlide < 0 ? -1 : 0;
+      pvy[i] -= ftDir * (ft / m) * dt;
+      pOmega[i] += ftDir * (ft * r / pInertia[i]) * dt;
+      const tauR = MU_ROLL_PW * r * fn;
+      const imp = Math.min(tauR * dt, Math.abs(pOmega[i]) * pInertia[i] * 0.5);
+      if (Math.abs(pOmega[i]) > 1e-6) pOmega[i] -= Math.sign(pOmega[i]) * imp / pInertia[i];
+      if (px[i] < CL + r) px[i] = CL + r;
     }
 
     // Right
-    const oR = (p.x + p.radius) - CR;
+    const oR = (px[i] + r) - CR;
     if (oR > 0) {
-      const d = Math.min(oR, MAX_DELTA_RATIO * p.radius);
-      const vn = -p.vx;
-      const fn = computeNormalForce(d, p.radius, p.mass, vn, ESTAR_PW, KN_PW, BETA_PW);
-      p.vx -= (fn / p.mass) * dt;
-      const vSlideR = p.vy + p.omega * p.radius;
-      {
-        const kTEffW = contactModel === 'hertz'
-          ? 2 * ESTAR_PW * Math.sqrt(Math.max(p.radius * d, 0.01))
-          : KN_PW;
-        const ftDampW = 2 * BETA_PW * Math.sqrt(Math.max(p.mass * kTEffW, 0.001));
-        const ft = Math.min(MU_PW * fn, ftDampW * Math.abs(vSlideR));
-        const ftDir = vSlideR > 0 ? 1 : vSlideR < 0 ? -1 : 0;
-        p.vy -= ftDir * (ft / p.mass) * dt;
-        p.omega -= ftDir * (ft * p.radius / p.inertia) * dt;
-      }
-      {
-        const tauR = MU_ROLL_PW * p.radius * fn;
-        const imp = Math.min(tauR * dt, Math.abs(p.omega) * p.inertia * 0.5);
-        if (Math.abs(p.omega) > 1e-6) p.omega -= Math.sign(p.omega) * imp / p.inertia;
-      }
-      p.x = Math.min(p.x, CR - p.radius);
+      const d = Math.min(oR, MAX_DELTA_RATIO * r);
+      const fn = computeNormalForcePW(d, r, m, -pvx[i]);
+      pvx[i] -= (fn / m) * dt;
+      const vSlide = pvy[i] + pOmega[i] * r;
+      const ft = Math.min(MU_PW * fn, tangentialDampPW(d, r, m) * Math.abs(vSlide));
+      const ftDir = vSlide > 0 ? 1 : vSlide < 0 ? -1 : 0;
+      pvy[i] -= ftDir * (ft / m) * dt;
+      pOmega[i] -= ftDir * (ft * r / pInertia[i]) * dt;
+      const tauR = MU_ROLL_PW * r * fn;
+      const imp = Math.min(tauR * dt, Math.abs(pOmega[i]) * pInertia[i] * 0.5);
+      if (Math.abs(pOmega[i]) > 1e-6) pOmega[i] -= Math.sign(pOmega[i]) * imp / pInertia[i];
+      if (px[i] > CR - r) px[i] = CR - r;
     }
   }
 
   // Integration + damping
-  for (const p of particles) {
-    p.vx *= VEL_DAMP;
-    p.vy *= VEL_DAMP;
-    p.omega *= ANG_DAMP;
+  for (let i = 0; i < n; i++) {
+    pvx[i] *= VEL_DAMP;
+    pvy[i] *= VEL_DAMP;
+    pOmega[i] *= ANG_DAMP;
 
-    p.vx = clamp(p.vx, -MAX_VEL, MAX_VEL);
-    p.vy = clamp(p.vy, -MAX_VEL, MAX_VEL);
-    p.omega = clamp(p.omega, -MAX_OMEGA, MAX_OMEGA);
+    pvx[i] = clamp(pvx[i], -MAX_VEL, MAX_VEL);
+    pvy[i] = clamp(pvy[i], -MAX_VEL, MAX_VEL);
+    pOmega[i] = clamp(pOmega[i], -MAX_OMEGA, MAX_OMEGA);
 
-    p.x += p.vx * dt;
-    p.y += p.vy * dt;
-    p.angle += p.omega * dt;
+    px[i] += pvx[i] * dt;
+    py[i] += pvy[i] * dt;
+    pAngle[i] += pOmega[i] * dt;
 
-    if (!p.active && p.y > DANGER_Y) {
-      p.active = true;
-    }
+    if (pActive[i] === 0 && py[i] > DANGER_Y) pActive[i] = 1;
   }
 
-  // Iterative position correction (resolve overlaps without adding energy)
+  // Iterative position correction
   for (let iter = 0; iter < profile.correctionIterations; iter++) {
-    // Particle-particle separation
-    for (const [i, j] of spatialHash.findPairs(particles)) {
-      const a = particles[i];
-      const b = particles[j];
-      const dx = b.x - a.x;
-      const dy = b.y - a.y;
+    const pc = grid.collectPairs(px, py, pRadius, n);
+    for (let k = 0; k < pc; k++) {
+      const i = grid.getPairI(k);
+      const j = grid.getPairJ(k);
+      const dx = px[j] - px[i];
+      const dy = py[j] - py[i];
       const distSq = dx * dx + dy * dy;
-      const minDist = a.radius + b.radius;
+      const minDist = pRadius[i] + pRadius[j];
       if (distSq >= minDist * minDist) continue;
-      const dist = Math.sqrt(Math.max(distSq, 1e-8));
+      const dist = Math.sqrt(distSq > 1e-8 ? distSq : 1e-8);
       const overlap = minDist - dist;
       if (overlap <= 0) continue;
       const nx = dx / dist;
       const ny = dy / dist;
-      const totalM = a.mass + b.mass;
+      const totalM = pMass[i] + pMass[j];
       const corr = overlap * 0.3;
-      a.x -= nx * corr * (b.mass / totalM);
-      a.y -= ny * corr * (b.mass / totalM);
-      b.x += nx * corr * (a.mass / totalM);
-      b.y += ny * corr * (a.mass / totalM);
+      px[i] -= nx * corr * (pMass[j] / totalM);
+      py[i] -= ny * corr * (pMass[j] / totalM);
+      px[j] += nx * corr * (pMass[i] / totalM);
+      py[j] += ny * corr * (pMass[i] / totalM);
     }
 
-    // Wall clamping
-    for (const p of particles) {
-      if (p.y + p.radius > CB) p.y = CB - p.radius;
-      if (p.x - p.radius < CL) p.x = CL + p.radius;
-      if (p.x + p.radius > CR) p.x = CR - p.radius;
+    for (let i = 0; i < n; i++) {
+      const r = pRadius[i];
+      if (py[i] + r > CB) py[i] = CB - r;
+      if (px[i] - r < CL) px[i] = CL + r;
+      if (px[i] + r > CR) px[i] = CR - r;
     }
 
     if ((simStepSerial & 7) === 0) {
-      // Wall-squeeze detection: if a particle is pressed against a wall by another particle, push the other particle away
-      for (let i = 0; i < particles.length; i++) {
-        const p = particles[i];
-        const atLeftWall = (p.x - p.radius) < CL + 1;
-        const atRightWall = (p.x + p.radius) > CR - 1;
-        const atBottom = (p.y + p.radius) > CB - 1;
+      // Wall-squeeze relief: push the non-wall particle out
+      for (let i = 0; i < n; i++) {
+        const r = pRadius[i];
+        const atLeftWall = (px[i] - r) < CL + 1;
+        const atRightWall = (px[i] + r) > CR - 1;
+        const atBottom = (py[i] + r) > CB - 1;
         if (!atLeftWall && !atRightWall && !atBottom) continue;
 
-        const nearby = spatialHash.findNearbyIndices(particles, i, p.radius);
-        for (const j of nearby) {
-          const q = particles[j];
-          const dx = q.x - p.x;
-          const dy = q.y - p.y;
+        const nc = grid.collectNearby(px, py, pRadius, n, i, r);
+        for (let k = 0; k < nc; k++) {
+          const j = grid.getNearby(k);
+          const dx = px[j] - px[i];
+          const dy = py[j] - py[i];
           const distSq = dx * dx + dy * dy;
-          const minDist = p.radius + q.radius;
+          const minDist = r + pRadius[j];
           if (distSq >= minDist * minDist) continue;
-          const dist = Math.sqrt(Math.max(distSq, 1e-8));
+          const dist = Math.sqrt(distSq > 1e-8 ? distSq : 1e-8);
           const overlap = minDist - dist;
           if (overlap <= 0) continue;
-          // Push q away from p (p is against wall, so only move q)
           const nx = dx / dist;
           const ny = dy / dist;
-          q.x += nx * overlap * 0.5;
-          q.y += ny * overlap * 0.5;
+          px[j] += nx * overlap * 0.5;
+          py[j] += ny * overlap * 0.5;
         }
       }
     }
   }
 
-  contactVis = collectContactVis ? newContactVis : [];
   contactedPairs = newPairs;
   simStepSerial++;
 }
 
 function overlapsAnyParticle(index: number, extra = 0): boolean {
-  const p = particles[index];
-  if (!p) return false;
-  for (const j of spatialHash.findNearbyIndices(particles, index, extra)) {
-    const q = particles[j];
-    if (!q) continue;
-    const dx = q.x - p.x;
-    const dy = q.y - p.y;
-    const minDist = p.radius + q.radius + extra;
+  const nc = grid.collectNearby(px, py, pRadius, pCount, index, extra);
+  const r = pRadius[index];
+  for (let k = 0; k < nc; k++) {
+    const j = grid.getNearby(k);
+    const dx = px[j] - px[index];
+    const dy = py[j] - py[index];
+    const minDist = r + pRadius[j] + extra;
     if (dx * dx + dy * dy < minDist * minDist) return true;
   }
   return false;
@@ -744,11 +833,10 @@ function doGameOver() {
 }
 
 function checkGameOver() {
-  for (let i = 0; i < particles.length; i++) {
-    const p = particles[i];
-    if (p.graceFrames > 0) continue;
-    if (p.active && p.y < DANGER_Y) { doGameOver(); return; }
-    if (!p.active && p.y < DANGER_Y && overlapsAnyParticle(i)) {
+  for (let i = 0; i < pCount; i++) {
+    if (pGrace[i] > 0) continue;
+    if (pActive[i] === 1 && py[i] < DANGER_Y) { doGameOver(); return; }
+    if (pActive[i] === 0 && py[i] < DANGER_Y && overlapsAnyParticle(i)) {
       doGameOver();
       return;
     }
@@ -762,30 +850,39 @@ function checkGameOver() {
 function processMerges() {
   const consumed = new Set<number>();
   let mergedAny = false;
-  const particleById = new Map<number, Particle>();
-  for (const p of particles) particleById.set(p.id, p);
 
-  for (const [idA, idB] of mergeQueue) {
+  for (let k = 0; k < mergeQueueLen; k += 2) {
+    const idA = mergeQueue[k];
+    const idB = mergeQueue[k + 1];
     if (consumed.has(idA) || consumed.has(idB)) continue;
 
-    const a = particleById.get(idA);
-    const b = particleById.get(idB);
-    if (!a || !b || a.level !== b.level) continue;
+    const ia = findIndexById(idA);
+    const ib = findIndexById(idB);
+    if (ia < 0 || ib < 0 || pLevel[ia] !== pLevel[ib]) continue;
 
-    const mx = (a.x + b.x) / 2;
-    const my = (a.y + b.y) / 2;
-    const newLevel = a.level + 1;
+    const mx = (px[ia] + px[ib]) / 2;
+    const my = (py[ia] + py[ib]) / 2;
+    const level = pLevel[ia];
+    const newLevel = level + 1;
 
     consumed.add(idA);
     consumed.add(idB);
-    particles = particles.filter(p => p.id !== idA && p.id !== idB);
-    particleById.delete(idA);
-    particleById.delete(idB);
+
+    const ma = pMass[ia];
+    const mb = pMass[ib];
+    const tm = ma + mb;
+    const avgVx = (pvx[ia] * ma + pvx[ib] * mb) / tm;
+    const avgVy = (pvy[ia] * ma + pvy[ib] * mb) / tm;
+    const wasActive = pActive[ia] === 1 || pActive[ib] === 1;
+
+    // Remove higher index first so the lower index stays valid
+    if (ia > ib) { removeParticle(ia); removeParticle(ib); }
+    else { removeParticle(ib); removeParticle(ia); }
 
     mergedAny = true;
 
     if (newLevel >= LEVELS.length) {
-      const pts = LEVELS[a.level].score * 5;
+      const pts = LEVELS[level].score * 5;
       score += pts;
       mergeCount++;
       comboCount++;
@@ -797,17 +894,12 @@ function processMerges() {
       continue;
     }
 
-    const tm = a.mass + b.mass;
-    const np = createParticle(mx, my, newLevel);
-    const avgVx = (a.vx * a.mass + b.vx * b.mass) / tm;
-    const avgVy = (a.vy * a.mass + b.vy * b.mass) / tm;
-    np.vx = avgVx * 0.15;
-    np.vy = Math.max(avgVy * 0.15, 0);
-    np.omega = 0;
-    np.active = a.active || b.active;
-    np.graceFrames = GRACE_STEPS;
-    particles.push(np);
-    particleById.set(np.id, np);
+    const ni = spawnParticle(mx, my, newLevel);
+    pvx[ni] = avgVx * 0.15;
+    pvy[ni] = Math.max(avgVy * 0.15, 0);
+    pOmega[ni] = 0;
+    pActive[ni] = wasActive ? 1 : 0;
+    pGrace[ni] = GRACE_STEPS;
 
     effects.push({ x: mx, y: my, r: LEVELS[newLevel].radius * 0.3, alpha: 1, color: LEVELS[newLevel].color });
 
@@ -820,18 +912,14 @@ function processMerges() {
     updateScoreDisplays();
   }
 
-  mergeQueue = [];
+  mergeQueueLen = 0;
   if (comboTimer > 0) {
     comboTimer -= SUB_STEPS;
-    if (comboTimer === 0) comboCount = 0;
+    if (comboTimer <= 0) { comboTimer = 0; comboCount = 0; }
   }
 
-  if (mergedAny || particles.length > 0) {
-    chartDirty = true;
-  }
-  if (mergedAny) {
-    spatialHash.build(particles);
-  }
+  if (mergedAny || pCount > 0) chartDirty = true;
+  if (mergedAny) grid.build(px, py, pRadius, pCount);
 }
 
 // ================================================================
@@ -852,10 +940,10 @@ function drop() {
   const jitter = (Math.random() - 0.5) * 2;
   const cx = Math.max(CL + r + 2, Math.min(CR - r - 2, dropX + jitter));
   lastDroppedLevel = currentLevel;
-  const p = createParticle(cx, DROP_Y, currentLevel);
-  particles.push(p);
+  const i = spawnParticle(cx, DROP_Y, currentLevel);
+  if (i < 0) return;
   canDrop = false;
-  lastDroppedId = p.id;
+  lastDroppedId = pId[i];
   lastDropAnchorX = cx;
   lastDropAnchorY = DROP_Y;
   stepsSinceDrop = 0;
@@ -868,11 +956,12 @@ function drop() {
 }
 
 function restart() {
-  particles = [];
-  contactVis = [];
+  pCount = 0;
+  contactVis.length = 0;
+  contactVisLen = 0;
   effects = [];
   scorePopups = [];
-  mergeQueue = [];
+  mergeQueueLen = 0;
   contactedPairs.clear();
   nextId = 0;
 
@@ -905,7 +994,7 @@ function restart() {
 }
 
 // ================================================================
-// Canvas2D Rendering (optimized fallback)
+// Canvas2D Rendering (fallback)
 // ================================================================
 
 let dangerTimer = 0;
@@ -915,7 +1004,6 @@ function drawGameCanvas2D(profile: PerformanceProfile) {
   const ctx = gCtx;
   ctx.clearRect(0, 0, GAME_W, GAME_H);
 
-  // Background
   ctx.fillStyle = '#0f0f23';
   ctx.fillRect(0, 0, GAME_W, GAME_H);
   const bgGrad = ctx.createLinearGradient(0, 0, 0, GAME_H);
@@ -933,7 +1021,6 @@ function drawGameCanvas2D(profile: PerformanceProfile) {
   ctx.moveTo(CL, 0); ctx.lineTo(CL, CB); ctx.lineTo(CR, CB); ctx.lineTo(CR, 0);
   ctx.stroke();
 
-  // Danger line
   const dAlpha = dangerTimer > 0 ? 0.7 + 0.3 * Math.abs(Math.sin(Date.now() / 130)) : 0.6;
   ctx.strokeStyle = `rgba(255,160,0,${dAlpha})`;
   ctx.lineWidth = 5;
@@ -947,13 +1034,12 @@ function drawGameCanvas2D(profile: PerformanceProfile) {
   ctx.textAlign = 'right';
   ctx.fillText('DEAD LINE', CR - 4, DANGER_Y - 4);
 
-  // Force chains (optimized, no shadowBlur)
-  if (profile.effectiveForceChains && contactVis.length > 0) {
+  if (profile.effectiveForceChains && contactVisLen > 0) {
     let maxF = 1;
-    for (let i = 0; i < contactVis.length; i += profile.forceChainStride) {
+    for (let i = 0; i < contactVisLen; i += profile.forceChainStride) {
       if (contactVis[i].force > maxF) maxF = contactVis[i].force;
     }
-    for (let i = 0; i < contactVis.length; i += profile.forceChainStride) {
+    for (let i = 0; i < contactVisLen; i += profile.forceChainStride) {
       const c = contactVis[i];
       const t = Math.min(c.force / maxF, 1);
       const baseR = 8 + t * 24;
@@ -965,15 +1051,9 @@ function drawGameCanvas2D(profile: PerformanceProfile) {
       ctx.beginPath();
       ctx.arc(c.x, c.y, baseR, 0, Math.PI * 2);
       ctx.fill();
-      ctx.strokeStyle = `rgba(255,255,200,${0.5+t*0.5})`;
-      ctx.lineWidth = 2 + t * 3;
-      ctx.beginPath();
-      ctx.arc(c.x, c.y, baseR * 0.3, 0, Math.PI * 2);
-      ctx.stroke();
     }
   }
 
-  // Effects
   for (const e of effects) {
     ctx.beginPath();
     ctx.arc(e.x, e.y, e.r, 0, Math.PI * 2);
@@ -982,13 +1062,11 @@ function drawGameCanvas2D(profile: PerformanceProfile) {
     ctx.stroke();
   }
 
-  // Particles (cached)
   initParticleCache();
-  for (const p of particles) {
-    drawParticleCached(ctx, p.x, p.y, p.angle, p.level);
+  for (let i = 0; i < pCount; i++) {
+    drawParticleCached(ctx, px[i], py[i], pAngle[i], pLevel[i]);
   }
 
-  // Score popups
   for (const sp of scorePopups) {
     const alpha = sp.timer / 60;
     const sz = 14 + (1 - alpha) * 8;
@@ -1002,7 +1080,6 @@ function drawGameCanvas2D(profile: PerformanceProfile) {
     ctx.fillText(sp.text, sp.x, sp.y - 30 + (1 - alpha) * 20);
   }
 
-  // Combo
   if (comboCount > 1 && comboTimer > 0) {
     const alpha = comboTimer / COMBO_TIMEOUT_STEPS;
     const sz = 22 + comboCount * 2;
@@ -1016,7 +1093,6 @@ function drawGameCanvas2D(profile: PerformanceProfile) {
     ctx.fillText(`${comboCount} COMBO!`, GAME_W / 2, GAME_H / 2 - 60);
   }
 
-  // Drop preview
   if (!gameOver && canDrop) {
     const r = LEVELS[currentLevel].radius;
     const cx = Math.max(CL + r + 2, Math.min(CR - r - 2, dropX));
@@ -1032,13 +1108,6 @@ function drawGameCanvas2D(profile: PerformanceProfile) {
     }
     drawParticleCached(ctx, cx, DROP_Y, 0, currentLevel);
   }
-
-  // Status line
-  ctx.font = '9px sans-serif';
-  ctx.textAlign = 'left';
-  ctx.fillStyle = 'rgba(255,255,255,0.4)';
-  const modelText = contactModel === 'hertz' ? 'Hertz Contact' : 'Hooke Contact';
-  ctx.fillText(modelText, CL + 4, 14);
 }
 
 // ================================================================
@@ -1058,9 +1127,9 @@ function drawGradingChart() {
 
   const counts = new Array(LEVELS.length).fill(0);
   let totalMass = 0;
-  for (const p of particles) {
-    counts[p.level] += p.mass;
-    totalMass += p.mass;
+  for (let i = 0; i < pCount; i++) {
+    counts[pLevel[i]] += pMass[i];
+    totalMass += pMass[i];
   }
 
   ctx.strokeStyle = '#555';
@@ -1151,18 +1220,18 @@ function drawGradingChart() {
   ctx.lineWidth = 2.5;
   ctx.beginPath();
   for (let i = 0; i < points.length; i++) {
-    const px = toX(points[i].x);
-    const py = pad.top + pH - (points[i].y / 100) * pH;
-    if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+    const pxx = toX(points[i].x);
+    const pyy = pad.top + pH - (points[i].y / 100) * pH;
+    if (i === 0) ctx.moveTo(pxx, pyy); else ctx.lineTo(pxx, pyy);
   }
   ctx.stroke();
 
   ctx.fillStyle = 'rgba(139,111,71,0.1)';
   ctx.beginPath();
   for (let i = 0; i < points.length; i++) {
-    const px = toX(points[i].x);
-    const py = pad.top + pH - (points[i].y / 100) * pH;
-    if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+    const pxx = toX(points[i].x);
+    const pyy = pad.top + pH - (points[i].y / 100) * pH;
+    if (i === 0) ctx.moveTo(pxx, pyy); else ctx.lineTo(pxx, pyy);
   }
   ctx.lineTo(pad.left + pW, pad.top + pH);
   ctx.lineTo(pad.left, pad.top + pH);
@@ -1170,10 +1239,10 @@ function drawGradingChart() {
   ctx.fill();
 
   for (let i = 1; i < points.length - 1; i++) {
-    const px = toX(points[i].x);
-    const py = pad.top + pH - (points[i].y / 100) * pH;
+    const pxx = toX(points[i].x);
+    const pyy = pad.top + pH - (points[i].y / 100) * pH;
     ctx.beginPath();
-    ctx.arc(px, py, 2.5, 0, Math.PI * 2);
+    ctx.arc(pxx, pyy, 2.5, 0, Math.PI * 2);
     ctx.fillStyle = '#6B5235';
     ctx.fill();
   }
@@ -1250,7 +1319,6 @@ function drawGradingChart() {
     ctx.lineWidth = 4;
     ctx.lineJoin = 'round';
     ctx.miterLimit = 2;
-    ctx.strokeText(dl.label, hx + 4, hy - 3);
     ctx.strokeText(dl.label, hx + 4, hy - 3);
     ctx.fillStyle = dl.color;
     ctx.fillText(dl.label, hx + 4, hy - 3);
@@ -1424,37 +1492,37 @@ function setupInput() {
 // Main Loop
 // ================================================================
 
-function update() {
+function update(now: number) {
+  updateFpsAdaptation(now);
   const profile = getPerformanceProfile();
   if (!gameOver) {
     if (pressedKeys.has('ArrowLeft') || pressedKeys.has('a') || pressedKeys.has('A')) dropX = Math.max(CL + 20, dropX - 6);
     if (pressedKeys.has('ArrowRight') || pressedKeys.has('d') || pressedKeys.has('D')) dropX = Math.min(CR - 20, dropX + 6);
     if (compactMoveDir < 0) dropX = Math.max(CL + 20, dropX - 10);
     if (compactMoveDir > 0) dropX = Math.min(CR - 20, dropX + 10);
-    const dt = (1 / 60) / SUB_STEPS;
-    for (let i = 0; i < SUB_STEPS; i++) {
+    const sub = profile.subSteps;
+    const dt = (1 / 60) / sub;
+    for (let i = 0; i < sub; i++) {
       physicsStep(dt, profile);
     }
-    totalSimSteps += SUB_STEPS;
-    if (!canDrop) stepsSinceDrop += SUB_STEPS;
+    totalSimSteps += sub;
+    if (!canDrop) stepsSinceDrop += sub;
     processMerges();
     checkGameOver();
-    for (const p of particles) {
-      if (p.graceFrames > 0) p.graceFrames -= SUB_STEPS;
+    for (let i = 0; i < pCount; i++) {
+      if (pGrace[i] > 0) pGrace[i] -= sub;
     }
 
-    // Check if the last dropped particle has cleared the danger line or touched another particle
+    // Release the drop gate once the last particle settles below the line or contacts
     if (!canDrop && lastDroppedId !== null) {
-      const droppedIndex = particles.findIndex(p => p.id === lastDroppedId);
+      const droppedIndex = findIndexById(lastDroppedId);
       if (droppedIndex === -1) {
-        // Particle was consumed by merge — allow next drop
         releaseDropGate();
       } else {
-        const dp = particles[droppedIndex];
-        const fullyBelowLine = (dp.y - dp.radius) > DANGER_Y;
+        const fullyBelowLine = (py[droppedIndex] - pRadius[droppedIndex]) > DANGER_Y;
         const hasContact = !fullyBelowLine && overlapsAnyParticle(droppedIndex, 2);
         if (fullyBelowLine || hasContact) {
-          releaseDropGate(dp);
+          releaseDropGate(px[droppedIndex], py[droppedIndex]);
         }
       }
     }
@@ -1472,7 +1540,8 @@ function update() {
   // Render
   if (gpuRenderer) {
     gpuRenderer.drawFrame(
-      particles, contactVis, effects, scorePopups,
+      pCount, px, py, pRadius, pAngle, pLevel,
+      contactVis, contactVisLen, effects, scorePopups,
       comboCount, comboTimer, currentLevel, dropX, canDrop, gameOver,
       contactModel, showForceChains,
       dangerTimer > 0 ? 0.7 + 0.3 * Math.abs(Math.sin(Date.now() / 130)) : 0.6,
@@ -1483,7 +1552,6 @@ function update() {
     drawGameCanvas2D(profile);
   }
 
-  // Chart (throttled)
   if (chartDirty || (Date.now() - lastChartFrame > profile.chartIntervalMs)) {
     drawGradingChart();
     chartDirty = false;
@@ -1503,12 +1571,13 @@ function update() {
 
 async function main() {
   await initRenderer();
+  setupMute();
   currentLevel = getRandomLevel();
   nextLevel = getRandomLevel();
   updateNextPreview();
   updateHudStats();
   setupInput();
-  update();
+  update(performance.now());
 }
 
 main().catch(console.error);

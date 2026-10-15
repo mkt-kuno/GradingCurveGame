@@ -31,12 +31,16 @@ footer{width:100%;text-align:center;padding:12px 0 8px;font-size:24px;color:#444
 #compact-toolbar{display:none;gap:8px;grid-template-columns:repeat(5,minmax(0,1fr));margin-top:8px}
 #compact-toolbar button{min-height:52px;padding:8px 6px;font-size:15px;font-weight:700;background:#16213e;color:#fff;border:1px solid #2a3a5e;border-radius:12px;touch-action:manipulation}
 #compact-toolbar button.is-active{border-color:#FF6B00;color:#FFB366;background:rgba(255,107,0,.12)}
-#compact-help{display:none;margin-top:8px;padding:10px 12px;border-radius:12px;background:#16213e;font-size:13px;line-height:1.5;color:#ccd}
 #game-over{display:none;position:absolute;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.78);border-radius:12px;flex-direction:column;justify-content:center;align-items:center;gap:16px;z-index:20}
 #game-over h2{font-size:46px;color:#FF6B00}
 #game-over p{font-size:22px;color:#ccc}
 #game-over button{padding:14px 44px;font-size:22px;background:#FF6B00;color:#fff;border:none;border-radius:8px;cursor:pointer}
 #game-over button:hover{background:#CC5500}
+#mute-btn{position:fixed;right:14px;bottom:14px;z-index:50;width:52px;height:52px;border-radius:50%;border:1px solid rgba(127,167,255,.25);background:rgba(22,33,62,.85);color:#fff;font-size:24px;line-height:1;cursor:pointer;opacity:0;transform:translateY(6px);transition:opacity .25s,transform .25s,background .2s;backdrop-filter:blur(6px)}
+#mute-btn:hover,#mute-btn:focus-visible{opacity:1;transform:none}
+#mute-btn.muted{opacity:.45;transform:none}
+#mute-zone{position:fixed;right:0;bottom:0;width:120px;height:100px;z-index:49}
+#mute-zone:hover+#mute-btn,#mute-btn:hover{opacity:1;transform:none}
 #top-scores{color:#ccc;font-size:18px;text-align:left;line-height:1.8}
 .top-score-row{padding:2px 0}
 .top-score-row b{color:#FFB366}
@@ -79,9 +83,11 @@ body.compact #game-canvas{width:100%;height:auto;cursor:default}
 body.compact #right-panel{display:none}
 body.compact #compact-overlay{display:grid}
 body.compact #compact-toolbar{display:grid}
-body.compact #compact-help{display:block}
 body.compact #compact-hint{display:block}
 body:not(.compact) #compact-hint{display:none}
+/* Touch-first compact mode: swipe/tap on canvas is enough; keep toolbar to model/chain only */
+body.compact.canvas-hidden #compact-toolbar{grid-template-columns:repeat(2,minmax(0,1fr))}
+body.compact.canvas-hidden #compact-left-btn,body.compact.canvas-hidden #compact-right-btn,body.compact.canvas-hidden #compact-drop-btn{display:none}
 @media(max-width:900px),(max-height:760px){body{overflow:auto}}
 </style>
 </head>
@@ -126,7 +132,6 @@ body:not(.compact) #compact-hint{display:none}
       <button id="compact-model-btn" type="button">Hooke</button>
       <button id="compact-force-btn" type="button">CHAIN ON</button>
     </div>
-    <div id="compact-help">Tap: drop / Drag: aim / Swipe down: quick drop / Press buttons: move・model・chain</div>
   </div>
   <div id="right-panel">
     <div class="panel" id="score-panel">
@@ -160,9 +165,11 @@ body:not(.compact) #compact-hint{display:none}
     </div>
   </div>
 </div>
-<footer><span id="app-version">Application: version 3.5.1</span> | 開発者: 桑野研究室 ゲーム開発部（GDD） 顧問 久野 洵   |   BGM: <a href="https://dova-s.jp/bgm/detail/8536" target="_blank" rel="noopener" style="color:#444;text-decoration:none">「実験中・証明中」</a> written by ゆーぎり (DOVA-SYNDROME)</footer>
+<footer><span id="app-version">Application: version 3.6.0</span> | 開発者: 桑野研究室 ゲーム開発部（GDD） 顧問 久野 洵   |   BGM: <a href="https://dova-s.jp/bgm/detail/8536" target="_blank" rel="noopener" style="color:#444;text-decoration:none">「実験中・証明中」</a> written by ゆーぎり (DOVA-SYNDROME)</footer>
 </div>
 <audio id="bgm" src="bgm.opus" loop></audio>
+<div id="mute-zone" aria-hidden="true"></div>
+<button id="mute-btn" type="button" aria-label="Mute BGM">&#x1F50A;</button>
 <script src="dist/game.js"></script>
 <script>
 (function(){
@@ -181,6 +188,8 @@ body:not(.compact) #compact-hint{display:none}
     var compact=useCompact();
     document.body.classList.toggle('compact',compact);
     if(compact){
+      var coarse=window.matchMedia&&window.matchMedia('(pointer: coarse)').matches;
+      document.body.classList.toggle('canvas-hidden',coarse);
       document.documentElement.style.setProperty('--scale',1);
       return;
     }

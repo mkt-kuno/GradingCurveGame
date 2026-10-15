@@ -1,4 +1,4 @@
-const CACHE = 'grading-game-v4';
+const CACHE = 'grading-game-v5';
 const ASSETS = [
   './',
   './index.html',

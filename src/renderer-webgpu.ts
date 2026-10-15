@@ -1,6 +1,6 @@
 // ================================================================
-// WebGPU Renderer — instanced particle rendering with WGSL
-// Background + text handled by Canvas2D overlay
+// WebGPU Renderer — instanced particles + instanced additive glow
+// (force chains / effects). Text & overlays on a Canvas2D overlay.
 // ================================================================
 
 import {
@@ -10,7 +10,6 @@ import {
 interface ContactVis { x: number; y: number; force: number; }
 interface Effect { x: number; y: number; r: number; alpha: number; color: string; }
 interface ScorePopup { x: number; y: number; text: string; timer: number; }
-interface Particle { x: number; y: number; vx: number; vy: number; radius: number; mass: number; inertia: number; level: number; angle: number; omega: number; active: boolean; graceFrames: number; id: number; }
 interface RenderProfile {
   forceChainStride: number;
   effectiveForceChains: boolean;
@@ -23,6 +22,16 @@ interface RenderProfile {
 function hexToRGB(hex: string): [number, number, number] {
   const n = parseInt(hex.slice(1), 16);
   return [(n >> 16) / 255, ((n >> 8) & 0xFF) / 255, (n & 0xFF) / 255];
+}
+
+// Precomputed per-level colors (f32) — no per-frame parsing
+const LEVEL_FILL = new Float32Array(LEVELS.length * 3);
+const LEVEL_STROKE = new Float32Array(LEVELS.length * 3);
+for (let i = 0; i < LEVELS.length; i++) {
+  const [r, g, b] = hexToRGB(LEVELS[i].color);
+  const [sr, sg, sb] = hexToRGB(LEVELS[i].strokeColor);
+  LEVEL_FILL[i * 3] = r; LEVEL_FILL[i * 3 + 1] = g; LEVEL_FILL[i * 3 + 2] = b;
+  LEVEL_STROKE[i * 3] = sr; LEVEL_STROKE[i * 3 + 1] = sg; LEVEL_STROKE[i * 3 + 2] = sb;
 }
 
 const PARTICLE_WGSL = `
@@ -63,9 +72,6 @@ fn vs_main(
 fn hash(n: f32) -> f32 {
   return fract(sin(n) * 43758.5453123);
 }
-fn hash2(n: f32) -> f32 {
-  return fract(cos(n * 1.234) * 35791.234);
-}
 
 @fragment
 fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
@@ -95,28 +101,72 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
 }
 `;
 
+// Additive glow — unit quad, radial falloff (force chains & effects)
+const GLOW_WGSL = `
+struct VertexOut {
+  @builtin(position) position: vec4<f32>,
+  @location(0) uv: vec2<f32>,
+  @location(1) color: vec3<f32>,
+  @location(2) alpha: f32,
+}
+
+@vertex
+fn vs_main(
+  @location(0) pos: vec2<f32>,
+  @location(1) offset: vec2<f32>,
+  @location(2) radius: f32,
+  @location(3) color: vec3<f32>,
+  @location(4) alpha: f32,
+) -> VertexOut {
+  var out: VertexOut;
+  let world = pos * radius + offset;
+  let clip = (world / vec2<f32>(${GAME_W}.0, ${GAME_H}.0)) * 2.0 - 1.0;
+  out.position = vec4<f32>(clip.x, -clip.y, 0.0, 1.0);
+  out.uv = pos;
+  out.color = color;
+  out.alpha = alpha;
+  return out;
+}
+
+@fragment
+fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
+  let d = length(in.uv);
+  if (d > 1.0) { discard; }
+  let fall = (1.0 - d) * (1.0 - d);
+  return vec4<f32>(in.color * fall * in.alpha, fall * in.alpha);
+}
+`;
+
 const CIRCLE_SEGS = 24;
 const GPU_BUFFER_USAGE_VERTEX = 0x0020;
 const GPU_BUFFER_USAGE_COPY_DST = 0x0008;
+
+const ADDITIVE_BLEND: GPUBlendState = {
+  color: { srcFactor: 'src-alpha', dstFactor: 'one' },
+  alpha: { srcFactor: 'one', dstFactor: 'one' },
+};
 
 export class WebGPURenderer {
   device: GPUDevice;
   context: GPUCanvasContext;
   pipeline: GPURenderPipeline;
+  glowPipeline: GPURenderPipeline;
   vertexBuffer: GPUBuffer;
+  quadBuffer: GPUBuffer;
   instanceBuffer: GPUBuffer;
+  glowInstanceBuffer: GPUBuffer;
   overlayCanvas: HTMLCanvasElement;
   overlayCtx: CanvasRenderingContext2D;
   maxInst = 512;
+  maxGlowInst = 1024;
   circleVertCount: number;
-  private forceChainStride = 1;
 
   constructor(canvas: HTMLCanvasElement, device: GPUDevice) {
     this.device = device;
     this.context = canvas.getContext('webgpu') as unknown as GPUCanvasContext;
     this.context.configure({ device, format: 'rgba8unorm', alphaMode: 'premultiplied' });
 
-    // Circle mesh
+    // Circle fan mesh
     const triVerts: number[] = [];
     for (let i = 0; i < CIRCLE_SEGS; i++) {
       const a0 = (i / CIRCLE_SEGS) * Math.PI * 2;
@@ -133,9 +183,21 @@ export class WebGPURenderer {
     new Float32Array(this.vertexBuffer.getMappedRange()).set(triVerts);
     this.vertexBuffer.unmap();
 
+    // Unit quad for glows
+    const quad = new Float32Array([-1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1]);
+    this.quadBuffer = device.createBuffer({
+      size: quad.byteLength,
+      usage: GPU_BUFFER_USAGE_VERTEX,
+      mappedAtCreation: true,
+    });
+    new Float32Array(this.quadBuffer.getMappedRange()).set(quad);
+    this.quadBuffer.unmap();
+
     this.instanceBuffer = this.createInstanceBuffer(this.maxInst);
+    this.glowInstanceBuffer = this.createGlowBuffer(this.maxGlowInst);
 
     const shaderModule = device.createShaderModule({ code: PARTICLE_WGSL });
+    const glowModule = device.createShaderModule({ code: GLOW_WGSL });
 
     this.pipeline = device.createRenderPipeline({
       layout: 'auto',
@@ -143,10 +205,7 @@ export class WebGPURenderer {
         module: shaderModule,
         entryPoint: 'vs_main',
         buffers: [
-          {
-            arrayStride: 8,
-            attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x2' }],
-          },
+          { arrayStride: 8, attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x2' }] },
           {
             arrayStride: 44,
             stepMode: 'instance',
@@ -169,7 +228,34 @@ export class WebGPURenderer {
       primitive: { topology: 'triangle-list' },
     });
 
-    // Overlay canvas
+    this.glowPipeline = device.createRenderPipeline({
+      layout: 'auto',
+      vertex: {
+        module: glowModule,
+        entryPoint: 'vs_main',
+        buffers: [
+          { arrayStride: 8, attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x2' }] },
+          {
+            arrayStride: 28,
+            stepMode: 'instance',
+            attributes: [
+              { shaderLocation: 1, offset: 0, format: 'float32x2' },
+              { shaderLocation: 2, offset: 8, format: 'float32' },
+              { shaderLocation: 3, offset: 12, format: 'float32x3' },
+              { shaderLocation: 4, offset: 24, format: 'float32' },
+            ],
+          },
+        ],
+      },
+      fragment: {
+        module: glowModule,
+        entryPoint: 'fs_main',
+        targets: [{ format: 'rgba8unorm', blend: ADDITIVE_BLEND }],
+      },
+      primitive: { topology: 'triangle-list' },
+    });
+
+    // Overlay canvas for text
     this.overlayCanvas = document.createElement('canvas');
     this.overlayCanvas.width = GAME_W;
     this.overlayCanvas.height = GAME_H;
@@ -186,6 +272,13 @@ export class WebGPURenderer {
     });
   }
 
+  private createGlowBuffer(maxInst: number): GPUBuffer {
+    return this.device.createBuffer({
+      size: maxInst * 7 * 4,
+      usage: GPU_BUFFER_USAGE_VERTEX | GPU_BUFFER_USAGE_COPY_DST,
+    });
+  }
+
   private ensureInstanceCapacity(count: number) {
     if (count <= this.maxInst) return;
     let next = this.maxInst;
@@ -195,9 +288,20 @@ export class WebGPURenderer {
     this.instanceBuffer = this.createInstanceBuffer(this.maxInst);
   }
 
+  private ensureGlowCapacity(count: number) {
+    if (count <= this.maxGlowInst) return;
+    let next = this.maxGlowInst;
+    while (next < count) next *= 2;
+    this.glowInstanceBuffer.destroy();
+    this.maxGlowInst = next;
+    this.glowInstanceBuffer = this.createGlowBuffer(this.maxGlowInst);
+  }
+
   drawFrame(
-    particles: Particle[],
-    contactVis: ContactVis[],
+    pCount: number,
+    px: Float32Array, py: Float32Array, pRadius: Float32Array,
+    pAngle: Float32Array, pLevel: Int32Array,
+    contactVis: ContactVis[], contactVisLen: number,
     effects: Effect[],
     scorePopups: ScorePopup[],
     comboCount: number,
@@ -215,30 +319,75 @@ export class WebGPURenderer {
     const device = this.device;
     const ctx = this.overlayCtx;
 
-    // Update instance buffer
-    let allParticles = particles;
-    if (!gameOver && canDrop) {
-      const r = LEVELS[currentLevel].radius;
-      const cx = Math.max(CL + r + 2, Math.min(CR - r - 2, dropX));
-      allParticles = [...particles, { x: cx, y: DROP_Y, vx: 0, vy: 0, radius: r, mass: 0, inertia: 0, level: currentLevel, angle: 0, omega: 0, active: false, graceFrames: 0, id: -1 }];
-    }
+    const showPreview = !gameOver && canDrop;
+    const instCount = pCount + (showPreview ? 1 : 0);
+    this.ensureInstanceCapacity(instCount);
 
-    this.ensureInstanceCapacity(allParticles.length);
-    const cnt = allParticles.length;
-    const inst = new Float32Array(cnt * 11);
-    for (let i = 0; i < cnt; i++) {
-      const p = allParticles[i];
-      const info = LEVELS[p.level];
-      const c = hexToRGB(info.color);
-      const sc = hexToRGB(info.strokeColor);
+    const inst = new Float32Array(instCount * 11);
+    for (let i = 0; i < pCount; i++) {
+      const lv = pLevel[i];
       const o = i * 11;
-      inst[o] = p.x; inst[o+1] = p.y; inst[o+2] = p.radius;
-      inst[o+3] = p.angle; inst[o+4] = c[0]; inst[o+5] = c[1]; inst[o+6] = c[2];
-      inst[o+7] = sc[0]; inst[o+8] = sc[1]; inst[o+9] = sc[2]; inst[o+10] = p.level;
+      inst[o] = px[i]; inst[o + 1] = py[i]; inst[o + 2] = pRadius[i];
+      inst[o + 3] = pAngle[i];
+      inst[o + 4] = LEVEL_FILL[lv * 3]; inst[o + 5] = LEVEL_FILL[lv * 3 + 1]; inst[o + 6] = LEVEL_FILL[lv * 3 + 2];
+      inst[o + 7] = LEVEL_STROKE[lv * 3]; inst[o + 8] = LEVEL_STROKE[lv * 3 + 1]; inst[o + 9] = LEVEL_STROKE[lv * 3 + 2];
+      inst[o + 10] = lv;
+    }
+    let previewX = 0;
+    if (showPreview) {
+      const r = LEVELS[currentLevel].radius;
+      previewX = Math.max(CL + r + 2, Math.min(CR - r - 2, dropX));
+      const o = pCount * 11;
+      inst[o] = previewX; inst[o + 1] = DROP_Y; inst[o + 2] = r;
+      inst[o + 3] = 0;
+      inst[o + 4] = LEVEL_FILL[currentLevel * 3]; inst[o + 5] = LEVEL_FILL[currentLevel * 3 + 1]; inst[o + 6] = LEVEL_FILL[currentLevel * 3 + 2];
+      inst[o + 7] = LEVEL_STROKE[currentLevel * 3]; inst[o + 8] = LEVEL_STROKE[currentLevel * 3 + 1]; inst[o + 9] = LEVEL_STROKE[currentLevel * 3 + 2];
+      inst[o + 10] = currentLevel;
     }
     device.queue.writeBuffer(this.instanceBuffer, 0, inst);
 
-    // Render particles
+    // Glow instances: force chains + effect rings
+    const chainsOn = showForceChains && profile.effectiveForceChains && contactVisLen > 0;
+    const stride = Math.max(1, profile.forceChainStride);
+    let glowCount = 0;
+    if (chainsOn) glowCount += Math.ceil(contactVisLen / stride);
+    glowCount += effects.length;
+    this.ensureGlowCapacity(glowCount);
+    const glow = new Float32Array(Math.max(glowCount, 1) * 7);
+    let gi = 0;
+    if (chainsOn) {
+      let maxF = 1;
+      for (let i = 0; i < contactVisLen; i += stride) {
+        if (contactVis[i].force > maxF) maxF = contactVis[i].force;
+      }
+      const invMax = 1 / maxF;
+      for (let i = 0; i < contactVisLen; i += stride) {
+        const c = contactVis[i];
+        const t = Math.min(c.force * invMax, 1);
+        const o = gi * 7;
+        glow[o] = c.x; glow[o + 1] = c.y;
+        glow[o + 2] = 8 + t * 24;
+        glow[o + 3] = 1.0;
+        glow[o + 4] = 0.55 + 0.45 * (1 - t);
+        glow[o + 5] = 0.25 + 0.6 * (1 - t);
+        glow[o + 6] = 0.35 + t * 0.5;
+        gi++;
+      }
+    }
+    for (const e of effects) {
+      const c = hexToRGB(e.color);
+      const o = gi * 7;
+      glow[o] = e.x; glow[o + 1] = e.y;
+      glow[o + 2] = e.r * 1.4;
+      glow[o + 3] = c[0]; glow[o + 4] = c[1]; glow[o + 5] = c[2];
+      glow[o + 6] = e.alpha * 0.5;
+      gi++;
+    }
+    if (glowCount > 0) {
+      device.queue.writeBuffer(this.glowInstanceBuffer, 0, glow.subarray(0, glowCount * 7));
+    }
+
+    // Single render pass: particles, then additive glows on top
     const encoder = device.createCommandEncoder();
     const pass = encoder.beginRenderPass({
       colorAttachments: [{
@@ -251,14 +400,19 @@ export class WebGPURenderer {
     pass.setPipeline(this.pipeline);
     pass.setVertexBuffer(0, this.vertexBuffer);
     pass.setVertexBuffer(1, this.instanceBuffer);
-    pass.draw(this.circleVertCount, cnt);
+    pass.draw(this.circleVertCount, instCount);
+    if (glowCount > 0) {
+      pass.setPipeline(this.glowPipeline);
+      pass.setVertexBuffer(0, this.quadBuffer);
+      pass.setVertexBuffer(1, this.glowInstanceBuffer);
+      pass.draw(6, glowCount);
+    }
     pass.end();
     device.queue.submit([encoder.finish()]);
 
-    // Canvas2D overlay (text, effects, walls on top)
+    // ---- Canvas2D overlay (text, walls) ----
     ctx.clearRect(0, 0, GAME_W, GAME_H);
 
-    // Walls + container outline (on top of particles)
     ctx.fillStyle = '#1e1e45';
     ctx.fillRect(0, 0, WALL_T, GAME_H);
     ctx.fillRect(CR, 0, WALL_T, GAME_H);
@@ -269,7 +423,6 @@ export class WebGPURenderer {
     ctx.moveTo(CL, 0); ctx.lineTo(CL, CB); ctx.lineTo(CR, CB); ctx.lineTo(CR, 0);
     ctx.stroke();
 
-    // Danger line
     const dAlpha = dangerAlpha > 0 ? 0.7 + 0.3 * Math.abs(Math.sin(time / 130)) : 0.6;
     ctx.strokeStyle = `rgba(255,160,0,${dAlpha})`;
     ctx.lineWidth = 5;
@@ -283,68 +436,35 @@ export class WebGPURenderer {
     ctx.textAlign = 'right';
     ctx.fillText('DEAD LINE', CR - 4, DANGER_Y - 4);
 
-    // Force chains (simplified, no shadowBlur)
-    if (showForceChains && profile.effectiveForceChains && contactVis.length > 0) {
-      this.forceChainStride = Math.max(1, profile.forceChainStride);
-      let maxF = 1;
-      for (let i = 0; i < contactVis.length; i += this.forceChainStride) {
-        if (contactVis[i].force > maxF) maxF = contactVis[i].force;
-      }
-      for (let i = 0; i < contactVis.length; i += this.forceChainStride) {
-        const c = contactVis[i];
-        const t = Math.min(c.force / maxF, 1);
-        const baseR = 8 + t * 24;
-        const grad = ctx.createRadialGradient(c.x, c.y, 0, c.x, c.y, baseR);
-        grad.addColorStop(0, `rgba(255,255,${Math.floor(220*(1-t))},1)`);
-        grad.addColorStop(0.5, `rgba(255,${Math.floor(255*(1-t*0.8))},${Math.floor(50*(1-t))},${0.6+t*0.2})`);
-        grad.addColorStop(1, `rgba(${Math.floor(255-40*t)},${Math.floor(80*(1-t))},0,0)`);
-        ctx.fillStyle = grad;
-        ctx.beginPath();
-        ctx.arc(c.x, c.y, baseR, 0, Math.PI * 2);
-        ctx.fill();
-      }
-    }
-
-    // Effects
-    for (const e of effects) {
-      ctx.beginPath();
-      ctx.arc(e.x, e.y, e.r, 0, Math.PI * 2);
-      ctx.strokeStyle = `rgba(255,255,255,${e.alpha})`;
-      ctx.lineWidth = 2;
-      ctx.stroke();
-    }
-
-    // Text for all particles
+    // Particle labels
     if (!gameOver) {
-      for (const p of particles) {
-        const info = LEVELS[p.level];
-        if (!profile.drawParticleLabels && p.radius < profile.minLabelRadius) continue;
-        const fontSize = Math.max(8, Math.floor(p.radius * 0.3));
+      for (let i = 0; i < pCount; i++) {
+        const r = pRadius[i];
+        if (!profile.drawParticleLabels && r < profile.minLabelRadius) continue;
+        const fontSize = Math.max(8, Math.floor(r * 0.3));
         ctx.save();
-        ctx.translate(p.x, p.y);
-        ctx.rotate(p.angle);
+        ctx.translate(px[i], py[i]);
+        ctx.rotate(pAngle[i]);
         ctx.font = `bold ${fontSize}px sans-serif`;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.fillStyle = '#3E2723';
-        ctx.fillText(info.sieve, 0, 0);
+        ctx.fillText(LEVELS[pLevel[i]].sieve, 0, 0);
         ctx.restore();
       }
     }
 
-    // Preview particle text
-    if (!gameOver && canDrop) {
+    // Preview label
+    if (showPreview) {
       const r = LEVELS[currentLevel].radius;
-      const cx = Math.max(CL + r + 2, Math.min(CR - r - 2, dropX));
-      const info = LEVELS[currentLevel];
       const fontSize = Math.max(8, Math.floor(r * 0.3));
       ctx.save();
-      ctx.translate(cx, DROP_Y);
+      ctx.translate(previewX, DROP_Y);
       ctx.font = `bold ${fontSize}px sans-serif`;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillStyle = '#3E2723';
-      ctx.fillText(info.sieve, 0, 0);
+      ctx.fillText(LEVELS[currentLevel].sieve, 0, 0);
       ctx.restore();
     }
 
@@ -379,26 +499,17 @@ export class WebGPURenderer {
     }
 
     // Drop guide
-    if (!gameOver && canDrop) {
+    if (showPreview && profile.showDropGuide) {
       const r = LEVELS[currentLevel].radius;
-      const cx = Math.max(CL + r + 2, Math.min(CR - r - 2, dropX));
-      if (profile.showDropGuide) {
-        ctx.strokeStyle = 'rgba(255,255,255,0.12)';
-        ctx.lineWidth = 1;
-        ctx.setLineDash([4, 4]);
-        ctx.beginPath();
-        ctx.moveTo(cx, DROP_Y + r); ctx.lineTo(cx, CB);
-        ctx.stroke();
-        ctx.setLineDash([]);
-      }
+      ctx.strokeStyle = 'rgba(255,255,255,0.12)';
+      ctx.lineWidth = 1;
+      ctx.setLineDash([4, 4]);
+      ctx.beginPath();
+      ctx.moveTo(previewX, DROP_Y + r);
+      ctx.lineTo(previewX, CB);
+      ctx.stroke();
+      ctx.setLineDash([]);
     }
-
-    // Status line
-    ctx.font = '9px sans-serif';
-    ctx.textAlign = 'left';
-    ctx.fillStyle = 'rgba(255,255,255,0.4)';
-    const modelText = contactModel === 'hertz' ? 'Hertz Contact' : 'Hooke Contact';
-    ctx.fillText(modelText, CL + 4, 14);
   }
 
   dispose() {
