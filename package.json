@@ -1,9 +1,17 @@
 {
   "name": "grading-game",
-  "version": "3.6.0",
+  "version": "3.7.0",
   "scripts": {
     "build": "bun build src/game.ts --outfile dist/game.js --target browser && bun run scripts/build.ts",
     "serve": "bun run server.ts",
     "dev": "bun run build && bun run serve"
+  },
+  "dependencies": {
+    "workbox-window": "^7.4.1"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.4.4",
+    "typescript": "^7.0.2",
+    "workbox-build": "^7.4.1"
   }
 }

@@ -1,13 +1,13 @@
 // ================================================================
-// WebGPU Renderer — instanced particles + instanced additive glow
-// (force chains / effects). Text & overlays on a Canvas2D overlay.
+// WebGPU Renderer — instanced particles + instanced additive
+// Force Chains & glow effects. Text & overlays on a Canvas2D overlay.
 // ================================================================
 
 import {
   LEVELS, GAME_W, GAME_H, WALL_T, CL, CR, CB, DANGER_Y, DROP_Y, COMBO_TIMEOUT_STEPS,
+  ContactVis, getForceColor, getForceLineWidth,
 } from './constants';
 
-interface ContactVis { x: number; y: number; force: number; }
 interface Effect { x: number; y: number; r: number; alpha: number; color: string; }
 interface ScorePopup { x: number; y: number; text: string; timer: number; }
 interface RenderProfile {
@@ -101,43 +101,61 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
 }
 `;
 
-// Additive glow — unit quad, radial falloff (force chains & effects)
+// Additive glow & force chains — unit quad, supports both oriented line beams & radial glows
 const GLOW_WGSL = `
 struct VertexOut {
   @builtin(position) position: vec4<f32>,
   @location(0) uv: vec2<f32>,
   @location(1) color: vec3<f32>,
   @location(2) alpha: f32,
+  @location(3) mode: f32,
 }
 
 @vertex
 fn vs_main(
   @location(0) pos: vec2<f32>,
-  @location(1) offset: vec2<f32>,
-  @location(2) radius: f32,
-  @location(3) color: vec3<f32>,
-  @location(4) alpha: f32,
+  @location(1) center: vec2<f32>,
+  @location(2) halfSize: vec2<f32>,
+  @location(3) angle: f32,
+  @location(4) color: vec3<f32>,
+  @location(5) alpha: f32,
+  @location(6) mode: f32,
 ) -> VertexOut {
   var out: VertexOut;
-  let world = pos * radius + offset;
+  let c = cos(angle);
+  let s = sin(angle);
+  let scaled = pos * halfSize;
+  let rot = vec2<f32>(scaled.x * c - scaled.y * s, scaled.x * s + scaled.y * c);
+  let world = rot + center;
   let clip = (world / vec2<f32>(${GAME_W}.0, ${GAME_H}.0)) * 2.0 - 1.0;
   out.position = vec4<f32>(clip.x, -clip.y, 0.0, 1.0);
   out.uv = pos;
   out.color = color;
   out.alpha = alpha;
+  out.mode = mode;
   return out;
 }
 
 @fragment
 fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
-  let d = length(in.uv);
-  if (d > 1.0) { discard; }
-  let fall = (1.0 - d) * (1.0 - d);
-  return vec4<f32>(in.color * fall * in.alpha, fall * in.alpha);
+  if (in.mode > 0.5) {
+    // Radial glow (contact points & effects)
+    let d = length(in.uv);
+    if (d > 1.0) { discard; }
+    let fall = (1.0 - d) * (1.0 - d);
+    return vec4<f32>(in.color * fall * in.alpha, fall * in.alpha);
+  } else {
+    // Force Chain Beam (line connecting particles or wall)
+    let dy = abs(in.uv.y);
+    if (dy > 1.0) { discard; }
+    let beam = (1.0 - dy * dy);
+    let core = max(0.0, 1.0 - dy * 2.2);
+    let finalColor = mix(in.color, vec3<f32>(1.0, 1.0, 1.0), core * 0.7);
+    return vec4<f32>(finalColor * beam * in.alpha, beam * in.alpha);
+  }
 }
 `;
 
-const CIRCLE_SEGS = 24;
 const GPU_BUFFER_USAGE_VERTEX = 0x0020;
 const GPU_BUFFER_USAGE_COPY_DST = 0x0008;
 
@@ -151,39 +169,20 @@ export class WebGPURenderer {
   context: GPUCanvasContext;
   pipeline: GPURenderPipeline;
   glowPipeline: GPURenderPipeline;
-  vertexBuffer: GPUBuffer;
   quadBuffer: GPUBuffer;
   instanceBuffer: GPUBuffer;
   glowInstanceBuffer: GPUBuffer;
   overlayCanvas: HTMLCanvasElement;
   overlayCtx: CanvasRenderingContext2D;
   maxInst = 512;
-  maxGlowInst = 1024;
-  circleVertCount: number;
+  maxGlowInst = 2048;
 
   constructor(canvas: HTMLCanvasElement, device: GPUDevice) {
     this.device = device;
     this.context = canvas.getContext('webgpu') as unknown as GPUCanvasContext;
     this.context.configure({ device, format: 'rgba8unorm', alphaMode: 'premultiplied' });
 
-    // Circle fan mesh
-    const triVerts: number[] = [];
-    for (let i = 0; i < CIRCLE_SEGS; i++) {
-      const a0 = (i / CIRCLE_SEGS) * Math.PI * 2;
-      const a1 = ((i + 1) / CIRCLE_SEGS) * Math.PI * 2;
-      triVerts.push(0, 0, Math.cos(a0), Math.sin(a0), Math.cos(a1), Math.sin(a1));
-    }
-    this.circleVertCount = CIRCLE_SEGS * 3;
-
-    this.vertexBuffer = device.createBuffer({
-      size: triVerts.length * 4,
-      usage: GPU_BUFFER_USAGE_VERTEX,
-      mappedAtCreation: true,
-    });
-    new Float32Array(this.vertexBuffer.getMappedRange()).set(triVerts);
-    this.vertexBuffer.unmap();
-
-    // Unit quad for glows
+    // Unit quad for particles, glows, and force-chain beams
     const quad = new Float32Array([-1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1]);
     this.quadBuffer = device.createBuffer({
       size: quad.byteLength,
@@ -223,7 +222,13 @@ export class WebGPURenderer {
       fragment: {
         module: shaderModule,
         entryPoint: 'fs_main',
-        targets: [{ format: 'rgba8unorm', blend: { color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha' }, alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha' } } }],
+        targets: [{
+          format: 'rgba8unorm',
+          blend: {
+            color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha' },
+            alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha' },
+          },
+        }],
       },
       primitive: { topology: 'triangle-list' },
     });
@@ -236,13 +241,15 @@ export class WebGPURenderer {
         buffers: [
           { arrayStride: 8, attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x2' }] },
           {
-            arrayStride: 28,
+            arrayStride: 40,
             stepMode: 'instance',
             attributes: [
-              { shaderLocation: 1, offset: 0, format: 'float32x2' },
-              { shaderLocation: 2, offset: 8, format: 'float32' },
-              { shaderLocation: 3, offset: 12, format: 'float32x3' },
-              { shaderLocation: 4, offset: 24, format: 'float32' },
+              { shaderLocation: 1, offset: 0, format: 'float32x2' }, // center
+              { shaderLocation: 2, offset: 8, format: 'float32x2' }, // halfSize
+              { shaderLocation: 3, offset: 16, format: 'float32' },  // angle
+              { shaderLocation: 4, offset: 20, format: 'float32x3' }, // color
+              { shaderLocation: 5, offset: 32, format: 'float32' },  // alpha
+              { shaderLocation: 6, offset: 36, format: 'float32' },  // mode
             ],
           },
         ],
@@ -274,7 +281,7 @@ export class WebGPURenderer {
 
   private createGlowBuffer(maxInst: number): GPUBuffer {
     return this.device.createBuffer({
-      size: maxInst * 7 * 4,
+      size: maxInst * 10 * 4,
       usage: GPU_BUFFER_USAGE_VERTEX | GPU_BUFFER_USAGE_COPY_DST,
     });
   }
@@ -346,48 +353,83 @@ export class WebGPURenderer {
     }
     device.queue.writeBuffer(this.instanceBuffer, 0, inst);
 
-    // Glow instances: force chains + effect rings
+    // Glow instances: Force Chain beams + Contact sparks + effect rings
     const chainsOn = showForceChains && profile.effectiveForceChains && contactVisLen > 0;
     const stride = Math.max(1, profile.forceChainStride);
     let glowCount = 0;
-    if (chainsOn) glowCount += Math.ceil(contactVisLen / stride);
+    if (chainsOn) {
+      // 1 line beam + 1 spark per contact
+      glowCount += Math.ceil(contactVisLen / stride) * 2;
+    }
     glowCount += effects.length;
     this.ensureGlowCapacity(glowCount);
-    const glow = new Float32Array(Math.max(glowCount, 1) * 7);
+    const glow = new Float32Array(Math.max(glowCount, 1) * 10);
     let gi = 0;
+
     if (chainsOn) {
       let maxF = 1;
       for (let i = 0; i < contactVisLen; i += stride) {
         if (contactVis[i].force > maxF) maxF = contactVis[i].force;
       }
       const invMax = 1 / maxF;
+
       for (let i = 0; i < contactVisLen; i += stride) {
         const c = contactVis[i];
         const t = Math.min(c.force * invMax, 1);
-        const o = gi * 7;
-        glow[o] = c.x; glow[o + 1] = c.y;
-        glow[o + 2] = 8 + t * 24;
-        glow[o + 3] = 1.0;
-        glow[o + 4] = 0.55 + 0.45 * (1 - t);
-        glow[o + 5] = 0.25 + 0.6 * (1 - t);
-        glow[o + 6] = 0.35 + t * 0.5;
+        const col = getForceColor(t);
+        const halfThick = getForceLineWidth(t) * 0.5;
+
+        // 1. Force Chain Beam line between (x1, y1) and (x2, y2)
+        const dx = c.x2 - c.x1;
+        const dy = c.y2 - c.y1;
+        const len = Math.sqrt(dx * dx + dy * dy);
+        if (len > 1e-4) {
+          const angle = Math.atan2(dy, dx);
+          const o = gi * 10;
+          glow[o] = (c.x1 + c.x2) * 0.5;
+          glow[o + 1] = (c.y1 + c.y2) * 0.5;
+          glow[o + 2] = len * 0.5;
+          glow[o + 3] = halfThick;
+          glow[o + 4] = angle;
+          glow[o + 5] = col[0]; glow[o + 6] = col[1]; glow[o + 7] = col[2];
+          glow[o + 8] = 0.5 + t * 0.5; // alpha
+          glow[o + 9] = 0.0;           // mode = line beam
+          gi++;
+        }
+
+        // 2. Contact Point Spark
+        const sparkR = 7 + t * 18;
+        const so = gi * 10;
+        glow[so] = c.x;
+        glow[so + 1] = c.y;
+        glow[so + 2] = sparkR;
+        glow[so + 3] = sparkR;
+        glow[so + 4] = 0.0;
+        glow[so + 5] = col[0]; glow[so + 6] = col[1]; glow[so + 7] = col[2];
+        glow[so + 8] = 0.6 + t * 0.4; // alpha
+        glow[so + 9] = 1.0;           // mode = radial glow
         gi++;
       }
     }
+
     for (const e of effects) {
       const c = hexToRGB(e.color);
-      const o = gi * 7;
+      const o = gi * 10;
       glow[o] = e.x; glow[o + 1] = e.y;
       glow[o + 2] = e.r * 1.4;
-      glow[o + 3] = c[0]; glow[o + 4] = c[1]; glow[o + 5] = c[2];
-      glow[o + 6] = e.alpha * 0.5;
+      glow[o + 3] = e.r * 1.4;
+      glow[o + 4] = 0.0;
+      glow[o + 5] = c[0]; glow[o + 6] = c[1]; glow[o + 7] = c[2];
+      glow[o + 8] = e.alpha * 0.5;
+      glow[o + 9] = 1.0; // mode = radial glow
       gi++;
     }
-    if (glowCount > 0) {
-      device.queue.writeBuffer(this.glowInstanceBuffer, 0, glow.subarray(0, glowCount * 7));
+
+    if (gi > 0) {
+      device.queue.writeBuffer(this.glowInstanceBuffer, 0, glow.subarray(0, gi * 10));
     }
 
-    // Single render pass: particles, then additive glows on top
+    // Single render pass: particles, then additive force chains & glows on top
     const encoder = device.createCommandEncoder();
     const pass = encoder.beginRenderPass({
       colorAttachments: [{
@@ -398,14 +440,15 @@ export class WebGPURenderer {
       }],
     });
     pass.setPipeline(this.pipeline);
-    pass.setVertexBuffer(0, this.vertexBuffer);
+    pass.setVertexBuffer(0, this.quadBuffer);
     pass.setVertexBuffer(1, this.instanceBuffer);
-    pass.draw(this.circleVertCount, instCount);
-    if (glowCount > 0) {
+    pass.draw(6, instCount);
+
+    if (gi > 0) {
       pass.setPipeline(this.glowPipeline);
       pass.setVertexBuffer(0, this.quadBuffer);
       pass.setVertexBuffer(1, this.glowInstanceBuffer);
-      pass.draw(6, glowCount);
+      pass.draw(6, gi);
     }
     pass.end();
     device.queue.submit([encoder.finish()]);
@@ -468,51 +511,53 @@ export class WebGPURenderer {
       ctx.restore();
     }
 
+    // Drop line guide
+    if (profile.showDropGuide && showPreview) {
+      ctx.strokeStyle = 'rgba(255,255,255,0.15)';
+      ctx.lineWidth = 1;
+      ctx.setLineDash([4, 4]);
+      ctx.beginPath();
+      ctx.moveTo(previewX, DROP_Y + LEVELS[currentLevel].radius);
+      ctx.lineTo(previewX, CB);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    // Combo UI
+    if (comboCount > 1) {
+      const remainingRatio = Math.max(0, comboTimer / COMBO_TIMEOUT_STEPS);
+      const cx = GAME_W / 2;
+      const cy = 46;
+      ctx.save();
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.font = '900 24px "Trebuchet MS", sans-serif';
+      ctx.fillStyle = '#ffd54f';
+      ctx.shadowColor = 'rgba(255, 193, 7, 0.4)';
+      ctx.shadowBlur = 12;
+      ctx.fillText(`COMBO x${comboCount}`, cx, cy);
+      ctx.restore();
+
+      const bw = 140;
+      const bh = 5;
+      const bx = cx - bw / 2;
+      const by = cy + 16;
+      ctx.fillStyle = 'rgba(255,255,255,0.12)';
+      ctx.fillRect(bx, by, bw, bh);
+      ctx.fillStyle = '#ffd54f';
+      ctx.fillRect(bx, by, bw * remainingRatio, bh);
+    }
+
     // Score popups
-    const popupStart = Math.max(0, scorePopups.length - profile.maxScorePopups);
-    for (let i = popupStart; i < scorePopups.length; i++) {
+    const maxPop = Math.min(scorePopups.length, profile.maxScorePopups);
+    for (let i = 0; i < maxPop; i++) {
       const sp = scorePopups[i];
       const alpha = sp.timer / 60;
       const sz = 14 + (1 - alpha) * 8;
       ctx.font = `bold ${sz}px sans-serif`;
       ctx.textAlign = 'center';
-      ctx.strokeStyle = `rgba(78,52,32,${alpha})`;
-      ctx.lineWidth = sz * 0.35;
-      ctx.lineJoin = 'round';
-      ctx.strokeText(sp.text, sp.x, sp.y - 30 + (1 - alpha) * 20);
-      ctx.fillStyle = `rgba(247,220,111,${alpha})`;
-      ctx.fillText(sp.text, sp.x, sp.y - 30 + (1 - alpha) * 20);
+      ctx.fillStyle = `rgba(255,215,0,${alpha})`;
+      ctx.fillText(sp.text, sp.x, sp.y - (60 - sp.timer) * 0.8);
     }
-
-    // Combo
-    if (comboCount > 1 && comboTimer > 0) {
-      const alpha = comboTimer / COMBO_TIMEOUT_STEPS;
-      const sz = 22 + comboCount * 2;
-      ctx.font = `bold ${sz}px sans-serif`;
-      ctx.textAlign = 'center';
-      ctx.strokeStyle = `rgba(78,52,32,${alpha})`;
-      ctx.lineWidth = sz * 0.35;
-      ctx.lineJoin = 'round';
-      ctx.strokeText(`${comboCount} COMBO!`, GAME_W / 2, GAME_H / 2 - 60);
-      ctx.fillStyle = `rgba(255,100,100,${alpha})`;
-      ctx.fillText(`${comboCount} COMBO!`, GAME_W / 2, GAME_H / 2 - 60);
-    }
-
-    // Drop guide
-    if (showPreview && profile.showDropGuide) {
-      const r = LEVELS[currentLevel].radius;
-      ctx.strokeStyle = 'rgba(255,255,255,0.12)';
-      ctx.lineWidth = 1;
-      ctx.setLineDash([4, 4]);
-      ctx.beginPath();
-      ctx.moveTo(previewX, DROP_Y + r);
-      ctx.lineTo(previewX, CB);
-      ctx.stroke();
-      ctx.setLineDash([]);
-    }
-  }
-
-  dispose() {
-    // cleanup
   }
 }

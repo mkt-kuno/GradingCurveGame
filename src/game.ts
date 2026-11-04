@@ -9,18 +9,18 @@ import {
   DROP_Y, DANGER_Y, GRAVITY, ESTAR_PP, ESTAR_PW, KN_PP, KN_PW,
   MU_PP, MU_PW, MU_ROLL_PP, MU_ROLL_PW,
   SUB_STEPS, COMBO_TIMEOUT_STEPS, GRACE_STEPS, MAX_DELTA_RATIO, MAX_VEL, MAX_OMEGA, VEL_DAMP, ANG_DAMP,
-  BETA_PP, BETA_PW,
+  BETA_PP, BETA_PW, ContactVis, getForceColor, getForceLineWidth,
 } from './constants';
 
 import { UniformGrid } from './spatial';
 import { WebGPURenderer } from './renderer-webgpu';
 import { WebGLRenderer } from './renderer-webgl';
+import { Workbox } from 'workbox-window';
 
 // ================================================================
 // Types
 // ================================================================
 
-interface ContactVis { x: number; y: number; force: number; }
 interface Effect { x: number; y: number; r: number; alpha: number; color: string; }
 interface ScorePopup { x: number; y: number; text: string; timer: number; }
 interface PerformanceProfile {
@@ -354,8 +354,7 @@ async function initRenderer() {
   }
 
   try {
-    initParticleCache();
-    gpuRenderer = new WebGLRenderer(gameCanvas, PARTICLE_CACHE);
+    gpuRenderer = new WebGLRenderer(gameCanvas);
     rendererKind = 'webgl';
     return;
   } catch (e) {
@@ -644,13 +643,18 @@ function physicsStep(dt: number, profile: PerformanceProfile) {
       if (contactVisLen < contactVis.length) {
         cv = contactVis[contactVisLen];
       } else {
-        cv = { x: 0, y: 0, force: 0 };
+        cv = { x: 0, y: 0, x1: 0, y1: 0, x2: 0, y2: 0, force: 0, isWall: false };
         contactVis.push(cv);
       }
       contactVisLen++;
       cv.x = (px[i] * rj + px[j] * ri) / (ri + rj);
       cv.y = (py[i] * rj + py[j] * ri) / (ri + rj);
+      cv.x1 = px[i];
+      cv.y1 = py[i];
+      cv.x2 = px[j];
+      cv.y2 = py[j];
       cv.force = Math.sqrt(fx * fx + fy * fy);
+      cv.isWall = false;
     }
 
     const key = pairKey(pId[i], pId[j]);
@@ -660,7 +664,6 @@ function physicsStep(dt: number, profile: PerformanceProfile) {
       mergeQueue[mergeQueueLen++] = pId[j];
     }
   }
-  if (contactVisLen < contactVis.length) contactVis.length = contactVisLen;
 
   // Wall contacts
   for (let i = 0; i < n; i++) {
@@ -682,6 +685,25 @@ function physicsStep(dt: number, profile: PerformanceProfile) {
       const imp = Math.min(tauR * dt, Math.abs(pOmega[i]) * pInertia[i] * 0.5);
       if (Math.abs(pOmega[i]) > 1e-6) pOmega[i] -= Math.sign(pOmega[i]) * imp / pInertia[i];
       if (py[i] > CB - r) py[i] = CB - r;
+
+      if (collectContactVis && fn > 1) {
+        let cv: ContactVis;
+        if (contactVisLen < contactVis.length) {
+          cv = contactVis[contactVisLen];
+        } else {
+          cv = { x: 0, y: 0, x1: 0, y1: 0, x2: 0, y2: 0, force: 0, isWall: true };
+          contactVis.push(cv);
+        }
+        contactVisLen++;
+        cv.x = px[i];
+        cv.y = CB;
+        cv.x1 = px[i];
+        cv.y1 = py[i];
+        cv.x2 = px[i];
+        cv.y2 = CB;
+        cv.force = fn;
+        cv.isWall = true;
+      }
     }
 
     // Left
@@ -699,6 +721,25 @@ function physicsStep(dt: number, profile: PerformanceProfile) {
       const imp = Math.min(tauR * dt, Math.abs(pOmega[i]) * pInertia[i] * 0.5);
       if (Math.abs(pOmega[i]) > 1e-6) pOmega[i] -= Math.sign(pOmega[i]) * imp / pInertia[i];
       if (px[i] < CL + r) px[i] = CL + r;
+
+      if (collectContactVis && fn > 1) {
+        let cv: ContactVis;
+        if (contactVisLen < contactVis.length) {
+          cv = contactVis[contactVisLen];
+        } else {
+          cv = { x: 0, y: 0, x1: 0, y1: 0, x2: 0, y2: 0, force: 0, isWall: true };
+          contactVis.push(cv);
+        }
+        contactVisLen++;
+        cv.x = CL;
+        cv.y = py[i];
+        cv.x1 = px[i];
+        cv.y1 = py[i];
+        cv.x2 = CL;
+        cv.y2 = py[i];
+        cv.force = fn;
+        cv.isWall = true;
+      }
     }
 
     // Right
@@ -716,8 +757,29 @@ function physicsStep(dt: number, profile: PerformanceProfile) {
       const imp = Math.min(tauR * dt, Math.abs(pOmega[i]) * pInertia[i] * 0.5);
       if (Math.abs(pOmega[i]) > 1e-6) pOmega[i] -= Math.sign(pOmega[i]) * imp / pInertia[i];
       if (px[i] > CR - r) px[i] = CR - r;
+
+      if (collectContactVis && fn > 1) {
+        let cv: ContactVis;
+        if (contactVisLen < contactVis.length) {
+          cv = contactVis[contactVisLen];
+        } else {
+          cv = { x: 0, y: 0, x1: 0, y1: 0, x2: 0, y2: 0, force: 0, isWall: true };
+          contactVis.push(cv);
+        }
+        contactVisLen++;
+        cv.x = CR;
+        cv.y = py[i];
+        cv.x1 = px[i];
+        cv.y1 = py[i];
+        cv.x2 = CR;
+        cv.y2 = py[i];
+        cv.force = fn;
+        cv.isWall = true;
+      }
     }
   }
+
+  if (contactVisLen < contactVis.length) contactVis.length = contactVisLen;
 
   // Integration + damping
   for (let i = 0; i < n; i++) {
@@ -1034,24 +1096,9 @@ function drawGameCanvas2D(profile: PerformanceProfile) {
   ctx.textAlign = 'right';
   ctx.fillText('DEAD LINE', CR - 4, DANGER_Y - 4);
 
-  if (profile.effectiveForceChains && contactVisLen > 0) {
-    let maxF = 1;
-    for (let i = 0; i < contactVisLen; i += profile.forceChainStride) {
-      if (contactVis[i].force > maxF) maxF = contactVis[i].force;
-    }
-    for (let i = 0; i < contactVisLen; i += profile.forceChainStride) {
-      const c = contactVis[i];
-      const t = Math.min(c.force / maxF, 1);
-      const baseR = 8 + t * 24;
-      const grad = ctx.createRadialGradient(c.x, c.y, 0, c.x, c.y, baseR);
-      grad.addColorStop(0, `rgba(255,255,${Math.floor(220*(1-t))},1)`);
-      grad.addColorStop(0.5, `rgba(255,${Math.floor(255*(1-t*0.8))},${Math.floor(50*(1-t))},${0.6+t*0.2})`);
-      grad.addColorStop(1, `rgba(${Math.floor(255-40*t)},${Math.floor(80*(1-t))},0,0)`);
-      ctx.fillStyle = grad;
-      ctx.beginPath();
-      ctx.arc(c.x, c.y, baseR, 0, Math.PI * 2);
-      ctx.fill();
-    }
+  initParticleCache();
+  for (let i = 0; i < pCount; i++) {
+    drawParticleCached(ctx, px[i], py[i], pAngle[i], pLevel[i]);
   }
 
   for (const e of effects) {
@@ -1062,9 +1109,54 @@ function drawGameCanvas2D(profile: PerformanceProfile) {
     ctx.stroke();
   }
 
-  initParticleCache();
-  for (let i = 0; i < pCount; i++) {
-    drawParticleCached(ctx, px[i], py[i], pAngle[i], pLevel[i]);
+  if (profile.effectiveForceChains && contactVisLen > 0) {
+    let maxF = 1;
+    for (let i = 0; i < contactVisLen; i += profile.forceChainStride) {
+      if (contactVis[i].force > maxF) maxF = contactVis[i].force;
+    }
+    const invMax = 1 / maxF;
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    for (let i = 0; i < contactVisLen; i += profile.forceChainStride) {
+      const c = contactVis[i];
+      const t = Math.min(c.force * invMax, 1);
+      const col = getForceColor(t);
+      const cr = Math.round(col[0] * 255);
+      const cg = Math.round(col[1] * 255);
+      const cb = Math.round(col[2] * 255);
+      const lw = getForceLineWidth(t);
+
+      // 1. Force Line Beam between (x1, y1) and (x2, y2)
+      const dx = c.x2 - c.x1;
+      const dy = c.y2 - c.y1;
+      if (dx * dx + dy * dy > 1e-4) {
+        ctx.beginPath();
+        ctx.moveTo(c.x1, c.y1);
+        ctx.lineTo(c.x2, c.y2);
+        ctx.strokeStyle = `rgba(${cr},${cg},${cb},${0.45 + t * 0.45})`;
+        ctx.lineWidth = lw;
+        ctx.stroke();
+
+        ctx.beginPath();
+        ctx.moveTo(c.x1, c.y1);
+        ctx.lineTo(c.x2, c.y2);
+        ctx.strokeStyle = `rgba(255,255,255,${0.35 + t * 0.45})`;
+        ctx.lineWidth = Math.max(1, lw * 0.35);
+        ctx.stroke();
+      }
+
+      // 2. Contact Point Spark
+      const sparkR = 7 + t * 18;
+      const grad = ctx.createRadialGradient(c.x, c.y, 0, c.x, c.y, sparkR);
+      grad.addColorStop(0, `rgba(255,255,255,${0.8 + t * 0.2})`);
+      grad.addColorStop(0.35, `rgba(${cr},${cg},${cb},${0.6 + t * 0.35})`);
+      grad.addColorStop(1, `rgba(${cr},${cg},${cb},0)`);
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc(c.x, c.y, sparkR, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
   }
 
   for (const sp of scorePopups) {
@@ -1582,6 +1674,20 @@ async function main() {
 
 main().catch(console.error);
 
-if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('sw.js').catch(() => {});
+// PWA: Register Service Worker using Workbox for reliable lifecycle and precache updates
+if ('serviceWorker' in navigator && (window.location.protocol === 'https:' || window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')) {
+  const wb = new Workbox('sw.js');
+  wb.addEventListener('installed', (event) => {
+    if (event.isUpdate) {
+      console.log('[PWA] New version ready.');
+    }
+  });
+  wb.addEventListener('activated', (event) => {
+    if (event.isUpdate) {
+      console.log('[PWA] Service Worker updated & activated.');
+    }
+  });
+  wb.register().catch((err) => {
+    console.warn('[PWA] Service Worker registration failed:', err);
+  });
 }

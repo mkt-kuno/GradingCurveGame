@@ -77,3 +77,38 @@ export function beta(e: number): number {
 
 export const BETA_PP = beta(REST_PP);
 export const BETA_PW = beta(REST_PW);
+
+export interface ContactVis {
+  x: number;
+  y: number;
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+  force: number;
+  isWall: boolean;
+}
+
+export function getForceColor(t: number): [number, number, number] {
+  // Heatmap for Force Chains: Cyan -> Lime/Yellow -> Orange/Red -> Bright White
+  // t is normalized in [0, 1]
+  const ct = Math.max(0, Math.min(1, t));
+  if (ct < 0.25) {
+    const s = ct / 0.25;
+    return [0.0, 0.7 + 0.3 * s, 1.0];
+  } else if (ct < 0.6) {
+    const s = (ct - 0.25) / 0.35;
+    return [s, 1.0, 1.0 - s * 0.9];
+  } else if (ct < 0.85) {
+    const s = (ct - 0.6) / 0.25;
+    return [1.0, 1.0 - 0.7 * s, 0.1 * (1.0 - s)];
+  } else {
+    const s = (ct - 0.85) / 0.15;
+    return [1.0, 0.3 + 0.7 * s, s];
+  }
+}
+
+export function getForceLineWidth(t: number): number {
+  return 1.8 + Math.max(0, Math.min(1, t)) * 7.0;
+}
+
