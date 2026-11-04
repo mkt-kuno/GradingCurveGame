@@ -28,6 +28,8 @@ async function buildServiceWorker() {
     globIgnores: ['node_modules/**/*', 'src/**/*', 'scripts/**/*', 'tsconfig.json'],
     swDest: 'sw.js',
     inlineWorkboxRuntime: true,
+    directoryIndex: 'index.html',
+    navigateFallback: 'index.html',
     clientsClaim: true,
     skipWaiting: true,
     cleanupOutdatedCaches: true,
