@@ -9,7 +9,7 @@ import {
   DROP_Y, DANGER_Y, GRAVITY, ESTAR_PP, ESTAR_PW, KN_PP, KN_PW,
   MU_PP, MU_PW, MU_ROLL_PP, MU_ROLL_PW,
   SUB_STEPS, COMBO_TIMEOUT_STEPS, GRACE_STEPS, MAX_DELTA_RATIO, MAX_VEL, MAX_OMEGA, VEL_DAMP, ANG_DAMP,
-  BETA_PP, BETA_PW, ContactVis, getForceColor, getForceLineWidth,
+  BETA_PP, BETA_PW, ContactVis, getForceColor, getForceRadius,
 } from './constants';
 
 import { UniformGrid } from './spatial';
@@ -1124,33 +1124,12 @@ function drawGameCanvas2D(profile: PerformanceProfile) {
       const cr = Math.round(col[0] * 255);
       const cg = Math.round(col[1] * 255);
       const cb = Math.round(col[2] * 255);
-      const lw = getForceLineWidth(t);
+      const sparkR = getForceRadius(t);
 
-      // 1. Force Line Beam between (x1, y1) and (x2, y2)
-      const dx = c.x2 - c.x1;
-      const dy = c.y2 - c.y1;
-      if (dx * dx + dy * dy > 1e-4) {
-        ctx.beginPath();
-        ctx.moveTo(c.x1, c.y1);
-        ctx.lineTo(c.x2, c.y2);
-        ctx.strokeStyle = `rgba(${cr},${cg},${cb},${0.45 + t * 0.45})`;
-        ctx.lineWidth = lw;
-        ctx.stroke();
-
-        ctx.beginPath();
-        ctx.moveTo(c.x1, c.y1);
-        ctx.lineTo(c.x2, c.y2);
-        ctx.strokeStyle = `rgba(255,255,255,${0.35 + t * 0.45})`;
-        ctx.lineWidth = Math.max(1, lw * 0.35);
-        ctx.stroke();
-      }
-
-      // 2. Contact Point Spark
-      const sparkR = 7 + t * 18;
       const grad = ctx.createRadialGradient(c.x, c.y, 0, c.x, c.y, sparkR);
-      grad.addColorStop(0, `rgba(255,255,255,${0.8 + t * 0.2})`);
-      grad.addColorStop(0.35, `rgba(${cr},${cg},${cb},${0.6 + t * 0.35})`);
-      grad.addColorStop(1, `rgba(${cr},${cg},${cb},0)`);
+      grad.addColorStop(0, `rgba(255,255,230,${0.85 + t * 0.15})`);
+      grad.addColorStop(0.25, `rgba(${cr},${cg},${cb},${0.65 + t * 0.3})`);
+      grad.addColorStop(1, `rgba(${cr},0,0,0)`);
       ctx.fillStyle = grad;
       ctx.beginPath();
       ctx.arc(c.x, c.y, sparkR, 0, Math.PI * 2);

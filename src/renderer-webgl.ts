@@ -6,7 +6,7 @@
 
 import {
   LEVELS, GAME_W, GAME_H, WALL_T, CL, CR, CB, DANGER_Y, DROP_Y,
-  COMBO_TIMEOUT_STEPS, ContactVis, getForceColor, getForceLineWidth,
+  COMBO_TIMEOUT_STEPS, ContactVis, getForceColor, getForceRadius,
 } from './constants';
 
 interface Effect { x: number; y: number; r: number; alpha: number; color: string; }
@@ -105,29 +105,21 @@ void main() {
 
 const VS_GLOW = `
 attribute vec2 aCorner;
-attribute vec2 aCenter;
-attribute vec2 aHalfSize;
-attribute float aAngle;
+attribute vec2 aOffset;
+attribute float aRadius;
 attribute vec3 aColor;
 attribute float aAlpha;
-attribute float aMode;
 uniform vec2 uResolution;
 varying vec2 vUv;
 varying vec3 vColor;
 varying float vAlpha;
-varying float vMode;
 void main() {
-  float c = cos(aAngle);
-  float s = sin(aAngle);
-  vec2 scaled = aCorner * aHalfSize;
-  vec2 rot = vec2(scaled.x * c - scaled.y * s, scaled.x * s + scaled.y * c);
-  vec2 world = rot + aCenter;
+  vec2 world = aCorner * aRadius + aOffset;
   vec2 clip = (world / uResolution) * 2.0 - 1.0;
   gl_Position = vec4(clip.x, -clip.y, 0.0, 1.0);
   vUv = aCorner;
   vColor = aColor;
   vAlpha = aAlpha;
-  vMode = aMode;
 }
 `;
 
@@ -136,21 +128,13 @@ precision mediump float;
 varying vec2 vUv;
 varying vec3 vColor;
 varying float vAlpha;
-varying float vMode;
 void main() {
-  if (vMode > 0.5) {
-    float d = length(vUv);
-    if (d > 1.0) { discard; }
-    float fall = (1.0 - d) * (1.0 - d);
-    gl_FragColor = vec4(vColor * fall * vAlpha, fall * vAlpha);
-  } else {
-    float dy = abs(vUv.y);
-    if (dy > 1.0) { discard; }
-    float beam = (1.0 - dy * dy);
-    float core = max(0.0, 1.0 - dy * 2.2);
-    vec3 col = mix(vColor, vec3(1.0), core * 0.7);
-    gl_FragColor = vec4(col * beam * vAlpha, beam * vAlpha);
-  }
+  float d = length(vUv);
+  if (d > 1.0) { discard; }
+  float fall = (1.0 - d) * (1.0 - d);
+  float core = max(0.0, 1.0 - d * 2.8);
+  vec3 rgb = mix(vColor, vec3(1.0, 0.95, 0.8), core * 0.75);
+  gl_FragColor = vec4(rgb * fall * vAlpha, fall * vAlpha);
 }
 `;
 
@@ -201,10 +185,10 @@ export class WebGLRenderer {
     gl.bindBuffer(gl.ARRAY_BUFFER, this.instVBO);
     gl.bufferData(gl.ARRAY_BUFFER, this.maxInst * 11 * 4, gl.DYNAMIC_DRAW);
 
-    // Glow instance buffer: 10 floats per instance (40 bytes)
+    // Glow instance buffer: 7 floats per instance (28 bytes)
     this.glowVBO = gl.createBuffer()!;
     gl.bindBuffer(gl.ARRAY_BUFFER, this.glowVBO);
-    gl.bufferData(gl.ARRAY_BUFFER, this.maxGlowInst * 10 * 4, gl.DYNAMIC_DRAW);
+    gl.bufferData(gl.ARRAY_BUFFER, this.maxGlowInst * 7 * 4, gl.DYNAMIC_DRAW);
 
     this.setupVAOs();
 
@@ -281,14 +265,12 @@ export class WebGLRenderer {
       gl.vertexAttribPointer(corner, 2, gl.FLOAT, false, 0, 0);
 
       gl.bindBuffer(gl.ARRAY_BUFFER, this.glowVBO);
-      const stride = 10 * 4;
+      const stride = 7 * 4;
       const attrs: [string, number, number][] = [
-        ['aCenter', 2, 0],
-        ['aHalfSize', 2, 8],
-        ['aAngle', 1, 16],
-        ['aColor', 3, 20],
-        ['aAlpha', 1, 32],
-        ['aMode', 1, 36],
+        ['aOffset', 2, 0],
+        ['aRadius', 1, 8],
+        ['aColor', 3, 12],
+        ['aAlpha', 1, 24],
       ];
       for (const [name, size, offset] of attrs) {
         const loc = gl.getAttribLocation(p, name);
@@ -331,7 +313,7 @@ export class WebGLRenderer {
     this.maxGlowInst = next;
     const gl = this.gl;
     gl.bindBuffer(gl.ARRAY_BUFFER, this.glowVBO);
-    gl.bufferData(gl.ARRAY_BUFFER, this.maxGlowInst * 10 * 4, gl.DYNAMIC_DRAW);
+    gl.bufferData(gl.ARRAY_BUFFER, this.maxGlowInst * 7 * 4, gl.DYNAMIC_DRAW);
   }
 
   drawFrame(
@@ -383,16 +365,16 @@ export class WebGLRenderer {
       data[o + 10] = currentLevel;
     }
 
-    // Glow instances: Force Chain beams + Contact sparks + effects
+    // Glow instances: Vivid red contact sparks + effects
     const chainsOn = showForceChains && profile.effectiveForceChains && contactVisLen > 0;
     const stride = Math.max(1, profile.forceChainStride);
     let glowCount = 0;
     if (chainsOn) {
-      glowCount += Math.ceil(contactVisLen / stride) * 2;
+      glowCount += Math.ceil(contactVisLen / stride);
     }
     glowCount += effects.length;
     this.ensureGlowCapacity(glowCount);
-    const glow = new Float32Array(Math.max(glowCount, 1) * 10);
+    const glow = new Float32Array(Math.max(glowCount, 1) * 7);
     let gi = 0;
 
     if (chainsOn) {
@@ -406,51 +388,30 @@ export class WebGLRenderer {
         const c = contactVis[i];
         const t = Math.min(c.force * invMax, 1);
         const col = getForceColor(t);
-        const halfThick = getForceLineWidth(t) * 0.5;
+        const sparkR = getForceRadius(t);
 
-        // 1. Force Chain Beam
-        const dx = c.x2 - c.x1;
-        const dy = c.y2 - c.y1;
-        const len = Math.sqrt(dx * dx + dy * dy);
-        if (len > 1e-4) {
-          const angle = Math.atan2(dy, dx);
-          const o = gi * 10;
-          glow[o] = (c.x1 + c.x2) * 0.5;
-          glow[o + 1] = (c.y1 + c.y2) * 0.5;
-          glow[o + 2] = len * 0.5;
-          glow[o + 3] = halfThick;
-          glow[o + 4] = angle;
-          glow[o + 5] = col[0]; glow[o + 6] = col[1]; glow[o + 7] = col[2];
-          glow[o + 8] = 0.5 + t * 0.5;
-          glow[o + 9] = 0.0; // beam line
-          gi++;
-        }
-
-        // 2. Contact Point Spark
-        const sparkR = 7 + t * 18;
-        const so = gi * 10;
+        const so = gi * 7;
         glow[so] = c.x;
         glow[so + 1] = c.y;
         glow[so + 2] = sparkR;
-        glow[so + 3] = sparkR;
-        glow[so + 4] = 0.0;
-        glow[so + 5] = col[0]; glow[so + 6] = col[1]; glow[so + 7] = col[2];
-        glow[so + 8] = 0.6 + t * 0.4;
-        glow[so + 9] = 1.0; // radial glow
+        glow[so + 3] = col[0];
+        glow[so + 4] = col[1];
+        glow[so + 5] = col[2];
+        glow[so + 6] = 0.55 + t * 0.45;
         gi++;
       }
     }
 
     for (const e of effects) {
       const c = hexToRGB(e.color);
-      const o = gi * 10;
-      glow[o] = e.x; glow[o + 1] = e.y;
+      const o = gi * 7;
+      glow[o] = e.x;
+      glow[o + 1] = e.y;
       glow[o + 2] = e.r * 1.4;
-      glow[o + 3] = e.r * 1.4;
-      glow[o + 4] = 0.0;
-      glow[o + 5] = c[0]; glow[o + 6] = c[1]; glow[o + 7] = c[2];
-      glow[o + 8] = e.alpha * 0.5;
-      glow[o + 9] = 1.0; // radial glow
+      glow[o + 3] = c[0];
+      glow[o + 4] = c[1];
+      glow[o + 5] = c[2];
+      glow[o + 6] = e.alpha * 0.5;
       gi++;
     }
 
@@ -477,7 +438,7 @@ export class WebGLRenderer {
       gl.uniform2f(gl.getUniformLocation(this.glowProgram, 'uResolution'), GAME_W, GAME_H);
       gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
       gl.bindBuffer(gl.ARRAY_BUFFER, this.glowVBO);
-      gl.bufferSubData(gl.ARRAY_BUFFER, 0, glow.subarray(0, gi * 10));
+      gl.bufferSubData(gl.ARRAY_BUFFER, 0, glow.subarray(0, gi * 7));
       if (this.vaoExt && this.glowVAO) this.vaoExt.bindVertexArrayOES(this.glowVAO);
       else this.glowBind!();
       inst.drawArraysInstancedANGLE(gl.TRIANGLES, 0, 6, gi);

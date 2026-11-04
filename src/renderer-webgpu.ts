@@ -5,7 +5,7 @@
 
 import {
   LEVELS, GAME_W, GAME_H, WALL_T, CL, CR, CB, DANGER_Y, DROP_Y, COMBO_TIMEOUT_STEPS,
-  ContactVis, getForceColor, getForceLineWidth,
+  ContactVis, getForceColor, getForceRadius,
 } from './constants';
 
 interface Effect { x: number; y: number; r: number; alpha: number; color: string; }
@@ -101,58 +101,41 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
 }
 `;
 
-// Additive glow & force chains — unit quad, supports both oriented line beams & radial glows
+// Additive glow — unit quad, radial falloff with high-intensity hot core (contact points & effects)
 const GLOW_WGSL = `
 struct VertexOut {
   @builtin(position) position: vec4<f32>,
   @location(0) uv: vec2<f32>,
   @location(1) color: vec3<f32>,
   @location(2) alpha: f32,
-  @location(3) mode: f32,
 }
 
 @vertex
 fn vs_main(
   @location(0) pos: vec2<f32>,
-  @location(1) center: vec2<f32>,
-  @location(2) halfSize: vec2<f32>,
-  @location(3) angle: f32,
-  @location(4) color: vec3<f32>,
-  @location(5) alpha: f32,
-  @location(6) mode: f32,
+  @location(1) offset: vec2<f32>,
+  @location(2) radius: f32,
+  @location(3) color: vec3<f32>,
+  @location(4) alpha: f32,
 ) -> VertexOut {
   var out: VertexOut;
-  let c = cos(angle);
-  let s = sin(angle);
-  let scaled = pos * halfSize;
-  let rot = vec2<f32>(scaled.x * c - scaled.y * s, scaled.x * s + scaled.y * c);
-  let world = rot + center;
+  let world = pos * radius + offset;
   let clip = (world / vec2<f32>(${GAME_W}.0, ${GAME_H}.0)) * 2.0 - 1.0;
   out.position = vec4<f32>(clip.x, -clip.y, 0.0, 1.0);
   out.uv = pos;
   out.color = color;
   out.alpha = alpha;
-  out.mode = mode;
   return out;
 }
 
 @fragment
 fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
-  if (in.mode > 0.5) {
-    // Radial glow (contact points & effects)
-    let d = length(in.uv);
-    if (d > 1.0) { discard; }
-    let fall = (1.0 - d) * (1.0 - d);
-    return vec4<f32>(in.color * fall * in.alpha, fall * in.alpha);
-  } else {
-    // Force Chain Beam (line connecting particles or wall)
-    let dy = abs(in.uv.y);
-    if (dy > 1.0) { discard; }
-    let beam = (1.0 - dy * dy);
-    let core = max(0.0, 1.0 - dy * 2.2);
-    let finalColor = mix(in.color, vec3<f32>(1.0, 1.0, 1.0), core * 0.7);
-    return vec4<f32>(finalColor * beam * in.alpha, beam * in.alpha);
-  }
+  let d = length(in.uv);
+  if (d > 1.0) { discard; }
+  let fall = (1.0 - d) * (1.0 - d);
+  let core = max(0.0, 1.0 - d * 2.8);
+  let rgb = mix(in.color, vec3<f32>(1.0, 0.95, 0.8), core * 0.75);
+  return vec4<f32>(rgb * fall * in.alpha, fall * in.alpha);
 }
 `;
 
@@ -241,15 +224,13 @@ export class WebGPURenderer {
         buffers: [
           { arrayStride: 8, attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x2' }] },
           {
-            arrayStride: 40,
+            arrayStride: 28,
             stepMode: 'instance',
             attributes: [
-              { shaderLocation: 1, offset: 0, format: 'float32x2' }, // center
-              { shaderLocation: 2, offset: 8, format: 'float32x2' }, // halfSize
-              { shaderLocation: 3, offset: 16, format: 'float32' },  // angle
-              { shaderLocation: 4, offset: 20, format: 'float32x3' }, // color
-              { shaderLocation: 5, offset: 32, format: 'float32' },  // alpha
-              { shaderLocation: 6, offset: 36, format: 'float32' },  // mode
+              { shaderLocation: 1, offset: 0, format: 'float32x2' }, // offset (x, y)
+              { shaderLocation: 2, offset: 8, format: 'float32' },   // radius
+              { shaderLocation: 3, offset: 12, format: 'float32x3' }, // color (r, g, b)
+              { shaderLocation: 4, offset: 24, format: 'float32' },  // alpha
             ],
           },
         ],
@@ -281,7 +262,7 @@ export class WebGPURenderer {
 
   private createGlowBuffer(maxInst: number): GPUBuffer {
     return this.device.createBuffer({
-      size: maxInst * 10 * 4,
+      size: maxInst * 7 * 4,
       usage: GPU_BUFFER_USAGE_VERTEX | GPU_BUFFER_USAGE_COPY_DST,
     });
   }
@@ -353,17 +334,16 @@ export class WebGPURenderer {
     }
     device.queue.writeBuffer(this.instanceBuffer, 0, inst);
 
-    // Glow instances: Force Chain beams + Contact sparks + effect rings
+    // Glow instances: Vivid red contact sparks + effect rings
     const chainsOn = showForceChains && profile.effectiveForceChains && contactVisLen > 0;
     const stride = Math.max(1, profile.forceChainStride);
     let glowCount = 0;
     if (chainsOn) {
-      // 1 line beam + 1 spark per contact
-      glowCount += Math.ceil(contactVisLen / stride) * 2;
+      glowCount += Math.ceil(contactVisLen / stride);
     }
     glowCount += effects.length;
     this.ensureGlowCapacity(glowCount);
-    const glow = new Float32Array(Math.max(glowCount, 1) * 10);
+    const glow = new Float32Array(Math.max(glowCount, 1) * 7);
     let gi = 0;
 
     if (chainsOn) {
@@ -377,56 +357,35 @@ export class WebGPURenderer {
         const c = contactVis[i];
         const t = Math.min(c.force * invMax, 1);
         const col = getForceColor(t);
-        const halfThick = getForceLineWidth(t) * 0.5;
+        const sparkR = getForceRadius(t);
 
-        // 1. Force Chain Beam line between (x1, y1) and (x2, y2)
-        const dx = c.x2 - c.x1;
-        const dy = c.y2 - c.y1;
-        const len = Math.sqrt(dx * dx + dy * dy);
-        if (len > 1e-4) {
-          const angle = Math.atan2(dy, dx);
-          const o = gi * 10;
-          glow[o] = (c.x1 + c.x2) * 0.5;
-          glow[o + 1] = (c.y1 + c.y2) * 0.5;
-          glow[o + 2] = len * 0.5;
-          glow[o + 3] = halfThick;
-          glow[o + 4] = angle;
-          glow[o + 5] = col[0]; glow[o + 6] = col[1]; glow[o + 7] = col[2];
-          glow[o + 8] = 0.5 + t * 0.5; // alpha
-          glow[o + 9] = 0.0;           // mode = line beam
-          gi++;
-        }
-
-        // 2. Contact Point Spark
-        const sparkR = 7 + t * 18;
-        const so = gi * 10;
+        const so = gi * 7;
         glow[so] = c.x;
         glow[so + 1] = c.y;
         glow[so + 2] = sparkR;
-        glow[so + 3] = sparkR;
-        glow[so + 4] = 0.0;
-        glow[so + 5] = col[0]; glow[so + 6] = col[1]; glow[so + 7] = col[2];
-        glow[so + 8] = 0.6 + t * 0.4; // alpha
-        glow[so + 9] = 1.0;           // mode = radial glow
+        glow[so + 3] = col[0];
+        glow[so + 4] = col[1];
+        glow[so + 5] = col[2];
+        glow[so + 6] = 0.55 + t * 0.45; // alpha
         gi++;
       }
     }
 
     for (const e of effects) {
       const c = hexToRGB(e.color);
-      const o = gi * 10;
-      glow[o] = e.x; glow[o + 1] = e.y;
+      const o = gi * 7;
+      glow[o] = e.x;
+      glow[o + 1] = e.y;
       glow[o + 2] = e.r * 1.4;
-      glow[o + 3] = e.r * 1.4;
-      glow[o + 4] = 0.0;
-      glow[o + 5] = c[0]; glow[o + 6] = c[1]; glow[o + 7] = c[2];
-      glow[o + 8] = e.alpha * 0.5;
-      glow[o + 9] = 1.0; // mode = radial glow
+      glow[o + 3] = c[0];
+      glow[o + 4] = c[1];
+      glow[o + 5] = c[2];
+      glow[o + 6] = e.alpha * 0.5;
       gi++;
     }
 
     if (gi > 0) {
-      device.queue.writeBuffer(this.glowInstanceBuffer, 0, glow.subarray(0, gi * 10));
+      device.queue.writeBuffer(this.glowInstanceBuffer, 0, glow.subarray(0, gi * 7));
     }
 
     // Single render pass: particles, then additive force chains & glows on top

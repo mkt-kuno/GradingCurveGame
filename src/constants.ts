@@ -90,25 +90,16 @@ export interface ContactVis {
 }
 
 export function getForceColor(t: number): [number, number, number] {
-  // Heatmap for Force Chains: Cyan -> Lime/Yellow -> Orange/Red -> Bright White
-  // t is normalized in [0, 1]
+  // Vivid red radial glow: Deep neon red for light contact -> Hot orange-red -> White-hot core for heavy contact
   const ct = Math.max(0, Math.min(1, t));
-  if (ct < 0.25) {
-    const s = ct / 0.25;
-    return [0.0, 0.7 + 0.3 * s, 1.0];
-  } else if (ct < 0.6) {
-    const s = (ct - 0.25) / 0.35;
-    return [s, 1.0, 1.0 - s * 0.9];
-  } else if (ct < 0.85) {
-    const s = (ct - 0.6) / 0.25;
-    return [1.0, 1.0 - 0.7 * s, 0.1 * (1.0 - s)];
-  } else {
-    const s = (ct - 0.85) / 0.15;
-    return [1.0, 0.3 + 0.7 * s, s];
-  }
+  return [
+    1.0,
+    0.08 + ct * 0.45,
+    0.05 + ct * 0.25,
+  ];
 }
 
-export function getForceLineWidth(t: number): number {
-  return 1.8 + Math.max(0, Math.min(1, t)) * 7.0;
+export function getForceRadius(t: number): number {
+  return 8 + Math.max(0, Math.min(1, t)) * 26; // 8px (微小接触) 〜 34px (強荷重)
 }
 
