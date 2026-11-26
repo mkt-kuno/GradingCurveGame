@@ -29,6 +29,17 @@
 - `sw.js` - Service worker for PWA
 - `manifest.json` - PWA manifest
 
+## Layout
+
+- `body.wide` (landscape, w/h >= 1): 3-column grid authored at 1920x1080 (FHD); `--u` = 1 design px scaled to the viewport. `body.short` trims secondary panels for phone landscape.
+- `body.tall` (portrait): HUD chips + volume on top, grading chart, action row, board at the bottom (right-thumb reach). Tap/release on the board drops; swipe-down also drops.
+- `body.compact` (coarse pointer, min side < 600px) only selects the lighter performance profile.
+- Volume pill (`#vol-pill`, mute + slider) is present in every layout; volume uses a Web Audio GainNode (iOS ignores `HTMLMediaElement.volume`).
+
+## Main Loop
+
+- Fixed 60 Hz logical tick (`simTick`) decoupled from rAF: high-refresh displays do not speed up the DEM; backlog capped at 3 ticks/frame.
+
 ## CI/CD
 
 - GitHub Actions: `.github/workflows/deploy.yml`

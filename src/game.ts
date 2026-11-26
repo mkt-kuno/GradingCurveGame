@@ -107,6 +107,7 @@ let scorePopups: ScorePopup[] = [];
 const mergeQueue = new Int32Array(MAX_PARTICLES * 8); // flattened [idA, idB, ...]
 let mergeQueueLen = 0;
 let contactedPairs = new Set<number>();
+let scratchPairs = new Set<number>(); // double-buffered to avoid per-substep allocation
 
 let score = 0;
 let currentLevel = 0;
@@ -127,7 +128,9 @@ let totalSimSteps = 0;
 let simStepSerial = 0;
 let stepsSinceDrop = 0;
 
-const grid = new UniformGrid(500, MAX_PARTICLES);
+// Cell ~ 2x smallest radius: keeps per-cell occupancy well under SLOTS_PER_CELL
+// (a 500px cell overflowed with many sand grains and silently dropped contacts).
+const grid = new UniformGrid(96, MAX_PARTICLES);
 
 let chartDirty = true;
 let lastChartFrame = 0;
@@ -140,6 +143,7 @@ let rendererKind: 'webgpu' | 'webgl' | 'canvas2d' = 'canvas2d';
 let fpsEma = 60;
 let lastFrameTime = 0;
 let qualityTier = 0; // 0 = full, 1 = reduced, 2 = minimal
+let lastAdaptStep = 0;
 
 // ================================================================
 // DOM
@@ -166,13 +170,14 @@ const chkForces = document.getElementById('chk-forces') as HTMLInputElement;
 const compactHintEl = document.getElementById('compact-hint')!;
 const compactScoreEl = document.getElementById('compact-score')!;
 const compactNextEl = document.getElementById('compact-next')!;
-const compactLeftBtn = document.getElementById('compact-left-btn') as HTMLButtonElement;
-const compactDropBtn = document.getElementById('compact-drop-btn') as HTMLButtonElement;
-const compactRightBtn = document.getElementById('compact-right-btn') as HTMLButtonElement;
+const compactHiEl = document.getElementById('compact-hi')!;
+const compactNextDot = document.getElementById('compact-next-dot')!;
+const compactResetBtn = document.getElementById('compact-reset-btn') as HTMLButtonElement;
 const compactModelBtn = document.getElementById('compact-model-btn') as HTMLButtonElement;
 const compactForceBtn = document.getElementById('compact-force-btn') as HTMLButtonElement;
 const bgmEl = document.getElementById('bgm') as HTMLAudioElement;
 const muteBtn = document.getElementById('mute-btn') as HTMLButtonElement;
+const volSlider = document.getElementById('vol-slider') as HTMLInputElement;
 
 const pressedKeys = new Set<string>();
 let cachedCanvasRect = new DOMRect(0, 0, GAME_W, GAME_H);
@@ -182,7 +187,6 @@ let pointerStartY = 0;
 let pointerDragDistance = 0;
 let pointerVerticalDistance = 0;
 let pointerSwipeDropTriggered = false;
-let compactMoveDir = 0;
 
 function getTodayKey(): string {
   const d = new Date();
@@ -229,43 +233,139 @@ function addScoreToTop(s: number): TopScoreEntry[] {
 }
 
 // ================================================================
-// BGM mute (persisted in cookie)
+// BGM: mute + volume (persisted in cookies)
+// HTMLMediaElement.volume is read-only on iOS, so volume goes through a
+// Web Audio GainNode when available (falls back to element.volume).
 // ================================================================
 
-function readMuteCookie(): boolean {
-  return /(?:^|;\s*)bgm_muted=1/.test(document.cookie);
+function readCookie(name: string): string | null {
+  const m = document.cookie.match(new RegExp(`(?:^|;\\s*)${name}=([^;]*)`));
+  return m ? m[1] : null;
 }
 
-function writeMuteCookie(muted: boolean) {
+function writeCookie(name: string, value: string) {
   const expires = new Date(Date.now() + 365 * 864e5).toUTCString();
-  document.cookie = `bgm_muted=${muted ? 1 : 0}; expires=${expires}; path=/; SameSite=Lax`;
+  document.cookie = `${name}=${value}; expires=${expires}; path=/; SameSite=Lax`;
 }
 
-function applyMuteState(muted: boolean) {
-  bgmEl.muted = muted;
-  muteBtn.textContent = muted ? '\u{1F507}' : '\u{1F50A}';
-  muteBtn.classList.toggle('muted', muted);
-  muteBtn.setAttribute('aria-label', muted ? 'Unmute BGM' : 'Mute BGM');
+let bgmMuted = readCookie('bgm_muted') === '1';
+let bgmVolume = (() => {
+  const v = Number(readCookie('bgm_volume'));
+  return Number.isFinite(v) && readCookie('bgm_volume') !== null ? clamp(v, 0, 1) : 0.5;
+})();
+let audioCtx: AudioContext | null = null;
+let bgmGain: GainNode | null = null;
+let bgmStarted = false;
+
+function applyAudioState() {
+  const silent = bgmMuted || bgmVolume <= 0;
+  const gain = silent ? 0 : bgmVolume;
+  if (bgmGain && audioCtx) {
+    bgmGain.gain.setTargetAtTime(gain, audioCtx.currentTime, 0.02);
+    bgmEl.muted = false;
+    bgmEl.volume = 1;
+  } else {
+    bgmEl.muted = silent;
+    try { bgmEl.volume = gain; } catch { /* read-only on some platforms */ }
+  }
+  muteBtn.textContent = silent ? '\u{1F507}' : bgmVolume < 0.4 ? '\u{1F509}' : '\u{1F50A}';
+  muteBtn.classList.toggle('muted', silent);
+  muteBtn.setAttribute('aria-label', silent ? 'Unmute BGM' : 'Mute BGM');
+  muteBtn.setAttribute('aria-pressed', silent ? 'true' : 'false');
+  volSlider.value = String(Math.round(bgmVolume * 100));
+  volSlider.style.setProperty('--fill', `${Math.round(bgmVolume * 100)}%`);
 }
 
-function setupMute() {
-  applyMuteState(readMuteCookie());
+function startBgm() {
+  if (bgmStarted) return;
+  bgmStarted = true;
+  try {
+    const AC = window.AudioContext || (window as any).webkitAudioContext;
+    if (AC) {
+      audioCtx = new AC() as AudioContext;
+      const src = audioCtx.createMediaElementSource(bgmEl);
+      bgmGain = audioCtx.createGain();
+      bgmGain.gain.value = 0;
+      src.connect(bgmGain).connect(audioCtx.destination);
+      audioCtx.resume().catch(() => {});
+    }
+  } catch (err) {
+    console.warn('Web Audio unavailable, using element volume:', err);
+    audioCtx = null;
+    bgmGain = null;
+  }
+  applyAudioState();
+  bgmEl.play().catch(err => console.warn('BGM playback failed:', err));
+}
+
+function setupAudio() {
+  applyAudioState();
+  const kick = () => startBgm();
+  for (const ev of ['pointerdown', 'keydown', 'touchend']) {
+    document.addEventListener(ev, kick, { once: true, capture: true, passive: true });
+  }
   muteBtn.addEventListener('click', () => {
-    const muted = !bgmEl.muted;
-    writeMuteCookie(muted);
-    applyMuteState(muted);
+    if (bgmMuted || bgmVolume <= 0) {
+      bgmMuted = false;
+      if (bgmVolume <= 0) bgmVolume = 0.5;
+    } else {
+      bgmMuted = true;
+    }
+    writeCookie('bgm_muted', bgmMuted ? '1' : '0');
+    writeCookie('bgm_volume', bgmVolume.toFixed(2));
+    applyAudioState();
   });
+  volSlider.addEventListener('input', () => {
+    bgmVolume = clamp(Number(volSlider.value) / 100, 0, 1);
+    bgmMuted = bgmVolume <= 0;
+    applyAudioState();
+  });
+  volSlider.addEventListener('change', () => {
+    writeCookie('bgm_muted', bgmMuted ? '1' : '0');
+    writeCookie('bgm_volume', bgmVolume.toFixed(2));
+  });
+  // Keep the slider from stealing the game's keyboard controls
+  volSlider.addEventListener('keydown', (e) => e.stopPropagation());
+  document.addEventListener('visibilitychange', () => {
+    if (!bgmStarted) return;
+    if (document.hidden) {
+      bgmEl.pause();
+      audioCtx?.suspend().catch(() => {});
+    } else {
+      audioCtx?.resume().catch(() => {});
+      bgmEl.play().catch(() => {});
+    }
+  });
+}
+
+function setHighScoreText() {
+  highScoreEl.textContent = `今日のハイスコア / Todays HighScore: ${highScore}`;
+  compactHiEl.textContent = highScore.toLocaleString();
 }
 
 function updateHudStats() {
   compactScoreEl.textContent = score.toLocaleString();
 }
 
-function updateLayoutHint() {
-  const compact = window.matchMedia('(max-width: 900px), (max-height: 760px)').matches;
-  compactHintEl.textContent = compact
-    ? `Compact mobile layout active (${rendererKind})`
-    : `Desktop layout active (${rendererKind})`;
+// ================================================================
+// Layout: "wide" (desktop / tablet landscape, FHD reference) vs
+// "tall" (phone portrait, one-handed: HUD on top, board in thumb reach).
+// "compact" = small touch device -> lighter performance profile.
+// ================================================================
+
+function applyLayout() {
+  const w = window.innerWidth;
+  const h = window.innerHeight;
+  const tall = w / h < 1.0;
+  const coarse = window.matchMedia('(pointer: coarse)').matches;
+  const cl = document.body.classList;
+  cl.toggle('tall', tall);
+  cl.toggle('wide', !tall);
+  cl.toggle('short', !tall && h < 560);
+  cl.toggle('compact', coarse && Math.min(w, h) < 600);
+  compactHintEl.textContent = `${tall ? 'Portrait' : 'Landscape'} layout (${rendererKind})`;
+  updateCanvasRect();
+  chartDirty = true;
 }
 
 function getPerformanceProfile(): PerformanceProfile {
@@ -283,7 +383,7 @@ function getPerformanceProfile(): PerformanceProfile {
     minLabelRadius: compact || n > 180 ? 80 : 0,
     maxScorePopups: compact ? 6 : n >= 180 ? 8 : 12,
     chartIntervalMs: compact ? (n >= 120 ? 1400 : 900) : n >= 200 ? 1200 : n >= 120 ? 800 : 450,
-    showDropGuide: !compact && n < 220,
+    showDropGuide: n < 220,
   };
 }
 
@@ -296,8 +396,9 @@ function updateFpsAdaptation(now: number) {
     }
   }
   lastFrameTime = now;
-  // Adapt once per ~2 seconds
-  if ((totalSimSteps & 127) === 0) {
+  // Adapt at most once per ~2 s of simulated time
+  if (totalSimSteps - lastAdaptStep >= 2 * 60 * SUB_STEPS) {
+    lastAdaptStep = totalSimSteps;
     if (fpsEma < 50 && qualityTier < 2) qualityTier++;
     else if (fpsEma > 58 && qualityTier > 0) qualityTier--;
   }
@@ -332,7 +433,7 @@ function pushScorePopup(popup: ScorePopup) {
 }
 
 let highScore = loadHighScore();
-highScoreEl.textContent = `今日のハイスコア / Todays HighScore: ${highScore}`;
+setHighScoreText();
 
 // ================================================================
 // Renderer Detection: WebGPU -> WebGL -> Canvas2D
@@ -553,16 +654,18 @@ function tangentialDampPW(delta: number, radius: number, mass: number): number {
   return 2 * BETA_PW * Math.sqrt(mass * kT);
 }
 
-function physicsStep(dt: number, profile: PerformanceProfile) {
+function physicsStep(dt: number, profile: PerformanceProfile, lastSubStep: boolean) {
   const n = pCount;
-  const collectContactVis = profile.effectiveForceChains;
+  // Contact visuals are only consumed after the final substep of a frame
+  const collectContactVis = lastSubStep && profile.effectiveForceChains;
   contactVisLen = 0;
 
   // Gravity
   for (let i = 0; i < n; i++) pvy[i] += GRAVITY * dt;
 
   grid.build(px, py, pRadius, n);
-  const newPairs = new Set<number>();
+  const newPairs = scratchPairs;
+  newPairs.clear();
   const pairTotal = grid.collectPairs(px, py, pRadius, n);
 
   for (let k = 0; k < pairTotal; k++) {
@@ -858,6 +961,7 @@ function physicsStep(dt: number, profile: PerformanceProfile) {
     }
   }
 
+  scratchPairs = contactedPairs;
   contactedPairs = newPairs;
   simStepSerial++;
 }
@@ -890,7 +994,7 @@ function doGameOver() {
   if (score > highScore) {
     highScore = score;
     saveHighScore(highScore);
-    highScoreEl.textContent = `今日のハイスコア / Todays HighScore: ${highScore}`;
+    setHighScoreText();
   }
 }
 
@@ -1041,6 +1145,7 @@ function restart() {
   lastDropAnchorX = GAME_W / 2;
   lastDropAnchorY = DROP_Y;
   totalSimSteps = 0;
+  lastAdaptStep = 0;
   simStepSerial = 0;
   stepsSinceDrop = 0;
 
@@ -1048,7 +1153,7 @@ function restart() {
   gameOverEl.style.display = 'none';
   topScoresEl.innerHTML = '';
   highScore = loadHighScore();
-  highScoreEl.textContent = `今日のハイスコア / Todays HighScore: ${highScore}`;
+  setHighScoreText();
   updateNextPreview();
   chartDirty = true;
   syncControlState();
@@ -1185,10 +1290,37 @@ function drawGameCanvas2D(profile: PerformanceProfile) {
 // Grading Chart (throttled)
 // ================================================================
 
+// Chart is authored for a 540x585 design box; it is re-laid-out to the
+// container's aspect ratio and scaled (k) so it fills any panel crisply.
+const CHART_DESIGN_W = 540;
+const CHART_DESIGN_H = 585;
+let chartCssW = CHART_DESIGN_W;
+let chartCssH = CHART_DESIGN_H;
+
+function resizeChartCanvas() {
+  const wrap = chartCanvas.parentElement!;
+  const w = Math.floor(wrap.clientWidth);
+  const h = Math.floor(wrap.clientHeight);
+  if (w < 20 || h < 20) return;
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  chartCssW = w;
+  chartCssH = h;
+  const bw = Math.round(w * dpr);
+  const bh = Math.round(h * dpr);
+  if (chartCanvas.width !== bw || chartCanvas.height !== bh) {
+    chartCanvas.width = bw;
+    chartCanvas.height = bh;
+  }
+  chartDirty = true;
+}
+
 function drawGradingChart() {
   const ctx = cCtx;
-  const W = chartCanvas.width;
-  const H = chartCanvas.height;
+  const dpr = chartCanvas.width / chartCssW;
+  const k = clamp(Math.min(chartCssW, chartCssH * CHART_DESIGN_W / CHART_DESIGN_H) / CHART_DESIGN_W, 0.6, 1.6);
+  ctx.setTransform(dpr * k, 0, 0, dpr * k, 0, 0);
+  const W = chartCssW / k;
+  const H = chartCssH / k;
   const pad = { top: 28, right: 24, bottom: 56, left: 62 };
   const pW = W - pad.left - pad.right;
   const pH = H - pad.top - pad.bottom;
@@ -1451,6 +1583,10 @@ function updateNextPreview() {
   ctx.restore();
   nextNameEl.textContent = `${info.name} (${info.sieve})`;
   compactNextEl.textContent = info.sieve;
+  compactNextDot.style.background = info.color;
+  compactNextDot.style.borderColor = info.strokeColor;
+  const dot = Math.round(10 + 14 * (nextLevel / (LEVELS.length - 1)));
+  compactNextDot.style.width = compactNextDot.style.height = `${dot}px`;
 }
 
 // ================================================================
@@ -1458,34 +1594,15 @@ function updateNextPreview() {
 // ================================================================
 
 function setupInput() {
-  const clearCompactMove = () => {
-    compactMoveDir = 0;
-    compactLeftBtn.classList.remove('is-active');
-    compactRightBtn.classList.remove('is-active');
-  };
-  const bindCompactMoveButton = (button: HTMLButtonElement, dir: number) => {
-    button.addEventListener('pointerdown', (e) => {
-      e.preventDefault();
-      compactMoveDir = dir;
-      compactLeftBtn.classList.toggle('is-active', dir < 0);
-      compactRightBtn.classList.toggle('is-active', dir > 0);
-    });
-    button.addEventListener('pointerup', clearCompactMove);
-    button.addEventListener('pointercancel', clearCompactMove);
-    button.addEventListener('pointerleave', clearCompactMove);
-  };
   updateCanvasRect();
   if (typeof ResizeObserver !== 'undefined') {
     new ResizeObserver(() => updateCanvasRect()).observe(gameCanvas);
+    new ResizeObserver(() => resizeChartCanvas()).observe(chartCanvas.parentElement!);
   }
-  window.addEventListener('resize', () => {
-    updateCanvasRect();
-    updateLayoutHint();
-  });
-  window.addEventListener('orientationchange', () => {
-    updateCanvasRect();
-    updateLayoutHint();
-  });
+  resizeChartCanvas();
+  window.addEventListener('resize', applyLayout);
+  window.addEventListener('orientationchange', applyLayout);
+  window.visualViewport?.addEventListener('resize', applyLayout);
 
   gameCanvas.addEventListener('pointerdown', (e) => {
     if (!e.isPrimary) return;
@@ -1547,34 +1664,39 @@ function setupInput() {
     showForceChains = chkForces.checked;
     syncControlState();
   });
-  bindCompactMoveButton(compactLeftBtn, -1);
-  bindCompactMoveButton(compactRightBtn, 1);
-  compactDropBtn.addEventListener('click', () => drop());
+  compactResetBtn.addEventListener('click', () => {
+    // One-handed play: guard against an accidental thumb tap mid-game
+    if (!gameOver && pCount > 0 && !window.confirm('リセットしますか？ / Reset game?')) return;
+    restart();
+  });
   compactModelBtn.addEventListener('click', () => setContactModel(contactModel === 'hooke' ? 'hertz' : 'hooke'));
   compactForceBtn.addEventListener('click', () => {
     showForceChains = !showForceChains;
     syncControlState();
   });
   syncControlState();
-  updateLayoutHint();
+  applyLayout();
 }
 
 // ================================================================
 // Main Loop
 // ================================================================
 
-function update(now: number) {
-  updateFpsAdaptation(now);
-  const profile = getPerformanceProfile();
+// Fixed logical tick (60 Hz) decoupled from display refresh: 120/144 Hz panels
+// no longer run the DEM 2x faster, and slow frames catch up (bounded).
+const TICK_MS = 1000 / 60;
+const MAX_TICKS_PER_FRAME = 3;
+let tickAccum = 0;
+let lastTickTime = 0;
+
+function simTick(profile: PerformanceProfile) {
   if (!gameOver) {
     if (pressedKeys.has('ArrowLeft') || pressedKeys.has('a') || pressedKeys.has('A')) dropX = Math.max(CL + 20, dropX - 6);
     if (pressedKeys.has('ArrowRight') || pressedKeys.has('d') || pressedKeys.has('D')) dropX = Math.min(CR - 20, dropX + 6);
-    if (compactMoveDir < 0) dropX = Math.max(CL + 20, dropX - 10);
-    if (compactMoveDir > 0) dropX = Math.min(CR - 20, dropX + 10);
     const sub = profile.subSteps;
     const dt = (1 / 60) / sub;
     for (let i = 0; i < sub; i++) {
-      physicsStep(dt, profile);
+      physicsStep(dt, profile, i === sub - 1);
     }
     totalSimSteps += sub;
     if (!canDrop) stepsSinceDrop += sub;
@@ -1603,10 +1725,33 @@ function update(now: number) {
     e.r += 2.5;
     e.alpha -= 0.025;
   }
-  effects = effects.filter(e => e.alpha > 0);
+  if (effects.length) effects = effects.filter(e => e.alpha > 0);
 
   for (const sp of scorePopups) sp.timer--;
-  scorePopups = scorePopups.filter(sp => sp.timer > 0);
+  if (scorePopups.length) scorePopups = scorePopups.filter(sp => sp.timer > 0);
+
+  if (gameOver && dangerTimer > 0) dangerTimer--;
+}
+
+function update(now: number) {
+  updateFpsAdaptation(now);
+  const profile = getPerformanceProfile();
+
+  if (lastTickTime === 0) lastTickTime = now - TICK_MS;
+  let elapsed = now - lastTickTime;
+  lastTickTime = now;
+  if (elapsed > 250) elapsed = TICK_MS; // tab was hidden: don't fast-forward
+  tickAccum += elapsed;
+  let ticks = 0;
+  // 0.5 ms tolerance absorbs rAF jitter on 60 Hz displays
+  while (tickAccum >= TICK_MS - 0.5 && ticks < MAX_TICKS_PER_FRAME) {
+    simTick(profile);
+    tickAccum -= TICK_MS;
+    ticks++;
+  }
+  if (tickAccum > TICK_MS) tickAccum = 0; // overloaded: drop backlog instead of spiralling
+  if (tickAccum < -TICK_MS) tickAccum = 0;
+  if (ticks === 0) { requestAnimationFrame(update); return; } // nothing changed: skip redraw
 
   // Render
   if (gpuRenderer) {
@@ -1631,8 +1776,6 @@ function update(now: number) {
 
   if ((totalSimSteps & 31) === 0) updateHudStats();
 
-  if (gameOver && dangerTimer > 0) dangerTimer--;
-
   requestAnimationFrame(update);
 }
 
@@ -1641,8 +1784,9 @@ function update(now: number) {
 // ================================================================
 
 async function main() {
+  applyLayout();
   await initRenderer();
-  setupMute();
+  setupAudio();
   currentLevel = getRandomLevel();
   nextLevel = getRandomLevel();
   updateNextPreview();
